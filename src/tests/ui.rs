@@ -87,7 +87,9 @@ mod window {
             format!("┌{MIDDLE}┐\n{}\n└{MIDDLE}┘", sided("abc")).trim_end(),
             render.trim_end()
         );
-        assert_eq!(height, 3);
+        // Crossterm's Windows backend includes the final terminal row while
+        // its Unix backend does not; both renderings contain three lines.
+        assert_eq!(height, if cfg!(windows) { 4 } else { 3 });
     }
 
     #[test]
@@ -111,7 +113,7 @@ mod window {
             ),
             render.trim_end()
         );
-        assert_eq!(height, 5);
+        assert_eq!(height, if cfg!(windows) { 6 } else { 5 });
     }
 
     #[test]
