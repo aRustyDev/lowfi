@@ -70,6 +70,9 @@ cargo install lowfi --features mpris
 
 # If you want Windows hardware media keys / SMTC overlay.
 cargo install lowfi --features media-controls
+
+# On macOS, add the optional menu-bar interface.
+cargo install lowfi --features menubar
 ```
 
 And make sure `$HOME/.cargo/bin` is added to `$PATH`.
@@ -150,6 +153,40 @@ Yeah, that's it.
 | `q`, CTRL+C        | Quit            |
 | `b`                | Bookmark        |
 
+### macOS menu bar
+
+On macOS, build or run Lowfi with its optional native menu-bar interface:
+
+```sh
+cargo run --features menubar
+# or
+cargo build --release --features menubar
+./target/release/lowfi
+```
+
+The feature keeps the existing `lowfi` command and playback session. It adds a
+menu-bar icon with current-track status, Play/Pause, Next, and Quit. Menu-only
+operation stays in the foreground; it does not detach the process or create a
+launchd service.
+
+Set `[interfaces].mode` in `config.toml`, or use
+`LOWFI_INTERFACES__MODE` (`terminal`, `terminal-and-menubar`, or `menubar`). A
+feature-enabled macOS build defaults to `terminal-and-menubar`; all other builds
+default to `terminal`. `menubar` suppresses terminal setup and input, while
+`LOWFI_DISABLE_UI=1` also suppresses terminal setup when a menu is active.
+
+Lowfi attempts to register macOS Now Playing controls for Play, Pause, Toggle,
+and Next. Registration failures are reported to stderr and playback continues.
+Previous, seek, and skip-back are deliberately unavailable from this interface.
+
+### Playback history
+
+Lowfi retains the last 11 downloaded tracks for the current session as compressed
+audio, so going back does not download a track again. The terminal's previous-track
+media key restarts the current track after three seconds; before that it returns to
+the preceding retained track. After going back, Next and normal track completion
+move through retained forward history before downloading another track.
+
 > [!NOTE]
 > Besides its regular controls, lowfi offers compatibility with Media Keys
 > and [MPRIS](https://wiki.archlinux.org/title/MPRIS) (with tools like `playerctl`).
@@ -219,6 +256,9 @@ borderless = false
 clock = false
 fps = 12
 width = 3
+
+[interfaces]
+mode = "terminal"
 
 [bindings]
 play_pause = ["p", "Space"]

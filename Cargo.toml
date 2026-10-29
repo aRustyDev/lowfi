@@ -23,6 +23,7 @@ default-tracklist = []
 mpris = ["dep:mpris-server", "dep:arc-swap"]
 # Windows System Media Transport Controls (hardware media keys / overlay).
 media-controls = ["dep:souvlaki", "dep:windows"]
+menubar = ["dep:tao", "dep:tray-icon", "dep:objc2-media-player"]
 extra-audio-formats = ["rodio/default"]
 scrape = [
     "dep:serde_json",
@@ -79,4 +80,14 @@ windows = { version = "0.62", optional = true, features = [
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
     "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tao = { version = "0.34.5", optional = true, default-features = false }
+tray-icon = { version = "0.21.2", optional = true, default-features = false }
+objc2-media-player = { version = "0.3.2", optional = true, features = [
+    "MPNowPlayingInfoCenter",
+    "MPRemoteCommand",
+    "MPRemoteCommandCenter",
+    "MPRemoteCommandEvent",
 ] }

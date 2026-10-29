@@ -17,16 +17,16 @@ pub fn format_duration(duration: &Duration) -> String {
 }
 
 /// Creates the progress bar, as well as all the padding needed.
-pub fn progress_bar(state: &ui::State, width: usize) -> String {
+pub(crate) fn progress_bar(state: &ui::State, width: usize) -> String {
     let mut duration = Duration::new(0, 0);
-    let elapsed = if matches!(&state.current, Current::Track(_)) {
-        state.sink.get_pos()
+    let elapsed = if matches!(&state.player.current, Current::Track(_)) {
+        state.player.playback.position()
     } else {
         Duration::new(0, 0)
     };
 
     let mut filled = 0;
-    if let Current::Track(current) = &state.current {
+    if let Current::Track(current) = &state.player.current {
         if let Some(x) = current.duration {
             duration = x;
 
@@ -108,15 +108,15 @@ impl ActionBar {
 
 /// Creates the top/action bar, which has the name of the track and it's status.
 /// This also creates all the needed padding.
-pub fn action(state: &ui::State, width: usize) -> String {
-    let action = match state.current.clone() {
+pub(crate) fn action(state: &ui::State, width: usize) -> String {
+    let action = match state.player.current.clone() {
         Current::Loading(progress) => {
             ActionBar::Loading(progress.map(|x| (x.get() * 100.0).round() as u8))
         }
         Current::Track(info) => {
-            if state.sink.volume() < 0.01 {
+            if state.player.playback.volume() < 0.01 {
                 ActionBar::Muted
-            } else if state.sink.is_paused() {
+            } else if state.player.playback.is_paused() {
                 ActionBar::Paused(info)
             } else {
                 ActionBar::Playing(info)
@@ -124,7 +124,7 @@ pub fn action(state: &ui::State, width: usize) -> String {
         }
     };
 
-    let (main, len) = action.format(state.bookmarked);
+    let (main, len) = action.format(state.player.bookmarked);
     if len > width {
         let chopped: String = main.graphemes(true).take(width + 1).collect();
 
