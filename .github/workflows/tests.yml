@@ -25,3 +25,15 @@ jobs:
 
       - name: Run tests
         run: cargo test --all --verbose
+
+      - name: Check macOS bundle launcher portability
+        run: cargo check --locked --features macos-app --bin lowfi-app-launcher
+
+  macos-app:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Build and verify Lowfi.app
+        run: packaging/macos/build-app.sh
