@@ -81,17 +81,18 @@ build macOS-only features on Linux or Windows-only media controls on other
 platforms.
 
 Mutation testing uses three explicit scopes. The default configuration covers
-`src/player.rs`, `src/config.rs`, and terminal input mapping; `EventStream::listen`
-is excluded because it owns the terminal event loop. The Linux MPRIS
+`src/player.rs`, `src/config.rs`, and terminal input mapping; `input::listen`
+is excluded with `#[cfg_attr(test, mutants::skip)]` because it owns the terminal
+event loop. The Linux MPRIS
 configuration covers its in-process `Player` and `Sender`; all `Server`
 construction, dispatch, signal/property publication, and D-Bus handling are
 excluded because they require a session bus. The Windows configuration covers
 only `Server::map_event`; native control construction, synchronization
 (`sync_playback` and `sync_metadata`), teardown, window procedures, and
 message pumping require Windows SMTC. `sync_metadata` carries
-`#[mutants::skip]` because cargo-mutants does not apply regex exclusions to
-struct-field mutants; the attribute keeps its metadata-publication fields out
-of this in-process scope.
+`#[cfg_attr(test, mutants::skip)]` because cargo-mutants does not apply regex
+exclusions to struct-field mutants; the attribute keeps its metadata-publication
+fields out of this in-process scope.
 Packaging launchers, generated files, fixtures, and test code are also outside
 the mutation targets. Native CI compiles those feature gates.
 

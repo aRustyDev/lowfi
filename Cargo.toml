@@ -77,6 +77,7 @@ indicatif = { version = "0.18.4", optional = true }
 
 [dev-dependencies]
 figment = { version = "0.10.19", default-features = false, features = ["env", "toml", "test"] }
+mutants = "0.0.3"
 
 [package.metadata.cargo-fc]
 # Curated rows keep feature-gate coverage useful without expanding to the full

@@ -355,7 +355,7 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandOutcome, Current, History, Player, Update};
+    use super::{CommandOutcome, Current, History, PlaybackView, Player, Update};
     use crate::{
         audio::waiter, bookmark::Bookmarks, downloader, tests::fixture, tracks::Queued, Message,
     };
@@ -467,6 +467,10 @@ mod tests {
             CommandOutcome::Applied
         );
         assert_eq!(player.sink.speed(), 1.5);
+        assert_eq!(PlaybackView::new(player.sink.clone()).rate(), 1.5);
+        player.sink.set_volume(0.4);
+        player.handle(Message::ChangeVolume(0.1)).unwrap();
+        assert_eq!(player.sink.volume(), 0.5);
 
         for receiver in [&mut first, &mut second] {
             assert!(matches!(receiver.try_recv(), Ok(Update::Playback)));
@@ -475,7 +479,43 @@ mod tests {
             assert!(matches!(receiver.try_recv(), Ok(Update::Playback)));
             assert!(matches!(receiver.try_recv(), Ok(Update::Playback)));
             assert!(matches!(receiver.try_recv(), Ok(Update::Rate)));
+            assert!(matches!(receiver.try_recv(), Ok(Update::Volume)));
         }
+    }
+
+    #[test]
+    fn loading_guards_and_playback_view_reflect_live_state() {
+        let tracks = [fixture::queued("one"), fixture::queued("two")];
+        let (mut player, mut updates, mut output) = player_with_tracks(tracks);
+
+        let loading = player.snapshot("queue".into());
+        assert!(loading.loading);
+        assert!(loading.title.is_none());
+        assert_eq!(
+            player.handle(Message::Next).unwrap(),
+            CommandOutcome::Ignored
+        );
+        assert!(updates.try_recv().is_err());
+
+        assert_eq!(
+            player.handle(Message::Loaded).unwrap(),
+            CommandOutcome::Applied
+        );
+        assert_eq!(current_name(&player), "one");
+        render(&mut output, 1_024);
+        let playback = PlaybackView::new(player.sink.clone());
+        assert!(playback.position() > Duration::ZERO);
+        let playing = player.snapshot("queue".into());
+        assert!(!playing.loading);
+        assert_eq!(playing.title.as_deref(), Some("one"));
+
+        while updates.try_recv().is_ok() {}
+        assert_eq!(
+            player.handle(Message::Loaded).unwrap(),
+            CommandOutcome::Ignored
+        );
+        assert_eq!(current_name(&player), "one");
+        assert!(updates.try_recv().is_err());
     }
 
     #[test]
@@ -600,6 +640,7 @@ mod tests {
         while updates.try_recv().is_ok() {}
         render(&mut output, 160_000);
         assert!(player.sink.get_pos() >= Duration::from_secs(3));
+        assert!(player.can_go_previous());
 
         handle_while_rendering(&mut player, &mut output, Message::Previous);
         assert_eq!(current_name(&player), "one");

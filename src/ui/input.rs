@@ -7,6 +7,9 @@ use futures_util::{FutureExt, StreamExt};
 use tokio::sync::mpsc::Sender;
 
 /// Starts the listener to receive input from the terminal for various events.
+// EventStream owns the native terminal event loop and is covered by the
+// in-process message_for mapping tests below instead.
+#[cfg_attr(test, mutants::skip)]
 pub async fn listen(sender: Sender<Message>, bindings: BindingMap) -> super::Result<()> {
     let mut reader = EventStream::new();
 
@@ -68,6 +71,22 @@ mod tests {
         assert_eq!(
             message_for(KeyCode::Char('c'), KeyModifiers::CONTROL, &bindings),
             Some(Message::Quit)
+        );
+        assert_eq!(
+            message_for(KeyCode::Up, KeyModifiers::NONE, &bindings),
+            Some(Message::ChangeVolume(0.1))
+        );
+        assert_eq!(
+            message_for(KeyCode::Down, KeyModifiers::NONE, &bindings),
+            Some(Message::ChangeVolume(-0.1))
+        );
+        assert_eq!(
+            message_for(KeyCode::Right, KeyModifiers::NONE, &bindings),
+            Some(Message::ChangeVolume(0.01))
+        );
+        assert_eq!(
+            message_for(KeyCode::Left, KeyModifiers::NONE, &bindings),
+            Some(Message::ChangeVolume(-0.01))
         );
     }
 
