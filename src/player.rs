@@ -624,6 +624,31 @@ mod tests {
         assert_eq!(current_name(&player), "two");
         assert_eq!(player.generation, second_generation);
         assert!(updates.try_recv().is_err());
+
+        assert_eq!(
+            player
+                .handle(Message::PreviousAvailable(second_generation))
+                .unwrap(),
+            CommandOutcome::Applied
+        );
+        assert!(matches!(
+            updates.try_recv(),
+            Ok(Update::CanGoPrevious(true))
+        ));
+    }
+
+    #[test]
+    fn loaded_is_ignored_after_a_track_has_started() {
+        let (mut player, mut updates, _) = player_with_tracks([fixture::queued("one")]);
+        player.handle(Message::Init).unwrap();
+        while updates.try_recv().is_ok() {}
+
+        assert_eq!(
+            player.handle(Message::Loaded).unwrap(),
+            CommandOutcome::Ignored
+        );
+        assert_eq!(current_name(&player), "one");
+        assert!(updates.try_recv().is_err());
     }
 
     #[test]

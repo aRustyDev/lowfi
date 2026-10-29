@@ -83,7 +83,8 @@ platforms.
 Mutation testing uses three explicit scopes. The default configuration covers
 `src/player.rs`, `src/config.rs`, and terminal input mapping; `input::listen`
 is excluded with `#[cfg_attr(test, mutants::skip)]` because it owns the terminal
-event loop. The Linux MPRIS
+event loop. `Player::close` is excluded because it persists user files in the
+platform data and config directories. The Linux MPRIS
 configuration covers its in-process `Player` and `Sender`; all `Server`
 construction, dispatch, signal/property publication, and D-Bus handling are
 excluded because they require a session bus. The Windows configuration covers

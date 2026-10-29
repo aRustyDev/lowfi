@@ -72,6 +72,10 @@ mod tests {
             message_for(KeyCode::Char('c'), KeyModifiers::CONTROL, &bindings),
             Some(Message::Quit)
         );
+        assert_ne!(
+            message_for(KeyCode::Char('c'), KeyModifiers::NONE, &bindings),
+            Some(Message::Quit)
+        );
         assert_eq!(
             message_for(KeyCode::Up, KeyModifiers::NONE, &bindings),
             Some(Message::ChangeVolume(0.1))
