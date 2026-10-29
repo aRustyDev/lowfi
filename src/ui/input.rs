@@ -70,4 +70,73 @@ mod tests {
             Some(Message::Quit)
         );
     }
+
+    #[test]
+    fn media_keys_and_unmapped_input_are_handled_explicitly() {
+        let (_, bindings) = crate::config::load(
+            Path::new("missing.toml"),
+            crate::config::CliOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            message_for(
+                KeyCode::Media(event::MediaKeyCode::PlayPause),
+                KeyModifiers::NONE,
+                &bindings,
+            ),
+            Some(Message::PlayPause)
+        );
+        assert_eq!(
+            message_for(
+                KeyCode::Media(event::MediaKeyCode::Stop),
+                KeyModifiers::NONE,
+                &bindings,
+            ),
+            Some(Message::Pause)
+        );
+        assert_eq!(
+            message_for(
+                KeyCode::Media(event::MediaKeyCode::TrackNext),
+                KeyModifiers::NONE,
+                &bindings,
+            ),
+            Some(Message::Next)
+        );
+        assert_eq!(
+            message_for(
+                KeyCode::Media(event::MediaKeyCode::RaiseVolume),
+                KeyModifiers::NONE,
+                &bindings,
+            ),
+            Some(Message::ChangeVolume(0.1))
+        );
+        assert_eq!(
+            message_for(
+                KeyCode::Media(event::MediaKeyCode::LowerVolume),
+                KeyModifiers::NONE,
+                &bindings,
+            ),
+            Some(Message::ChangeVolume(-0.1))
+        );
+        assert_eq!(
+            message_for(
+                KeyCode::Media(event::MediaKeyCode::MuteVolume),
+                KeyModifiers::NONE,
+                &bindings,
+            ),
+            Some(Message::ChangeVolume(-1.0))
+        );
+        assert_eq!(
+            message_for(
+                KeyCode::Media(event::MediaKeyCode::TrackPrevious),
+                KeyModifiers::NONE,
+                &bindings,
+            ),
+            None
+        );
+        assert_eq!(
+            message_for(KeyCode::F(1), KeyModifiers::NONE, &bindings),
+            None
+        );
+    }
 }

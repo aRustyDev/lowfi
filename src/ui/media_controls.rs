@@ -151,6 +151,44 @@ impl Server {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_events_map_without_initializing_native_controls() {
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Play),
+            Some(Message::Play)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Stop),
+            Some(Message::Pause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Pause),
+            Some(Message::Pause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Toggle),
+            Some(Message::PlayPause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Next),
+            Some(Message::Next)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Quit),
+            Some(Message::Quit)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::SetVolume(0.25)),
+            Some(Message::SetVolume(0.25))
+        );
+        assert_eq!(Server::map_event(MediaControlEvent::Previous), None);
+    }
+}
+
 /// Minimal hidden window + Win32 message pump required by SMTC.
 mod windows {
     use std::io::Error;

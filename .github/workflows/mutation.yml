@@ -1,0 +1,69 @@
+name: Mutation tests
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  mutants:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux core
+            os: ubuntu-latest
+            features: default
+            config: .cargo/mutants.toml
+            install_alsa: true
+          - name: Linux MPRIS adapter
+            os: ubuntu-latest
+            features: mpris
+            config: .cargo/mutants-mpris.toml
+            install_alsa: true
+          - name: Windows core
+            os: windows-latest
+            features: default
+            config: .cargo/mutants.toml
+            install_alsa: false
+          - name: Windows media controls adapter
+            os: windows-latest
+            features: media-controls
+            config: .cargo/mutants-media-controls.toml
+            install_alsa: false
+          - name: macOS core with menu bar and launcher
+            os: macos-latest
+            features: menubar,macos-app
+            config: .cargo/mutants.toml
+            install_alsa: false
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install ALSA development headers
+        if: matrix.install_alsa
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install mutation test tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0 cargo-nextest@0.9.140
+      - name: Write mutation inventory
+        if: always()
+        run: >-
+          cargo mutants --config ${{ matrix.config }} --list --no-times
+          --features ${{ matrix.features }} > mutants-inventory.txt
+      - name: Run mutation tests
+        run: >-
+          cargo mutants --config ${{ matrix.config }} --no-shuffle
+          --features ${{ matrix.features }} --output mutants.out
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-${{ matrix.name }}
+          path: |
+            mutants-inventory.txt
+            mutants.out
+          if-no-files-found: warn

@@ -1,0 +1,11 @@
+# Windows media-controls pass. Only the pure event-to-command mapping is in
+# scope; constructing or pumping native SMTC controls needs a Windows desktop.
+examine_globs = ["src/ui/media_controls.rs"]
+exclude_globs = ["packaging/**", "src/tests/**", "tests/**", "target/**"]
+exclude_re = [
+    "^src/ui/media_controls\\.rs:.*(try_new|create|handle|sync_playback|sync_metadata|Drop for Server|windows::)",
+]
+additional_cargo_args = ["--locked"]
+test_tool = "nextest"
+minimum_test_timeout = 20
+timeout_multiplier = 5
