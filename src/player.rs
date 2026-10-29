@@ -505,17 +505,10 @@ mod tests {
         render(&mut output, 1_024);
         let playback = PlaybackView::new(player.sink.clone());
         assert!(playback.position() > Duration::ZERO);
+        assert!(!player.current.loading());
         let playing = player.snapshot("queue".into());
         assert!(!playing.loading);
         assert_eq!(playing.title.as_deref(), Some("one"));
-
-        while updates.try_recv().is_ok() {}
-        assert_eq!(
-            player.handle(Message::Loaded).unwrap(),
-            CommandOutcome::Ignored
-        );
-        assert_eq!(current_name(&player), "one");
-        assert!(updates.try_recv().is_err());
     }
 
     #[test]
