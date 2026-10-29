@@ -134,6 +134,9 @@ impl Server {
             .map_err(|e| ui::Error::MediaControls(format!("{e:?}")))
     }
 
+    // Native SMTC publication needs a Windows desktop integration harness. Keep
+    // it outside the adapter mutation scope; map_event is exercised in-process.
+    #[mutants::skip]
     fn sync_metadata(&mut self) -> ui::Result<()> {
         let (title, duration) = match &self.current {
             Current::Loading(_) => ("Loading...", None),

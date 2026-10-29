@@ -3,9 +3,16 @@
 examine_globs = ["src/ui/media_controls.rs"]
 exclude_globs = ["packaging/**", "src/tests/**", "tests/**", "target/**"]
 exclude_re = [
-    "Server::(try_new|create|handle|sync_playback|sync_metadata)",
+    "sync_metadata",
+    "sync_playback",
+    "try_new",
+    "Server::create",
+    "Server::handle",
     "Drop for Server",
     "windows::",
+    # Struct-field mutants do not retain the enclosing function in the name
+    # used for configuration matching. These four lines are sync_metadata.
+    "^src/ui/media_controls\\.rs:14[4-7]:",
 ]
 additional_cargo_args = ["--locked"]
 test_tool = "nextest"
