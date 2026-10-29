@@ -121,11 +121,13 @@ fn main() -> eyre::Result<()> {
 
     #[cfg(feature = "scrape")]
     if let Some(command) = &args.command {
-        return runtime()?.block_on(match command {
-            Commands::Scrape { source } => match source {
-                Source::Lofigirl => scrapers::lofigirl::scrape().await,
-                Source::Chillhop => scrapers::chillhop::scrape().await,
-            },
+        return runtime()?.block_on(async {
+            match command {
+                Commands::Scrape { source } => match source {
+                    Source::Lofigirl => scrapers::lofigirl::scrape().await,
+                    Source::Chillhop => scrapers::chillhop::scrape().await,
+                },
+            }
         });
     }
 
