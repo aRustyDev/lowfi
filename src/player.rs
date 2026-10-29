@@ -1,214 +1,456 @@
-//! The player, which contains all of the core logic behind the music player.
+//! The playback core and its frontend-neutral state boundary.
 
-use std::sync::Arc;
-use tokio::sync::mpsc::{self, Receiver};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
+
+use tokio::sync::broadcast;
 
 use crate::{
-    audio::waiter,
-    bookmark::Bookmarks,
-    downloader,
-    tracks::{self, List},
-    ui,
-    volume::PersistentVolume,
-    Message, Tasks,
+    audio::waiter, bookmark::Bookmarks, downloader, tracks, volume::PersistentVolume, Message,
 };
 
 /// Represents the currently known playback state.
-///
-/// * [`Current::Loading`] indicates the player is waiting for data.
-/// * [`Current::Track`] indicates the player has a decoded track available.
 #[derive(Clone, Debug)]
-pub enum Current {
-    /// Waiting for a track to arrive. The optional `Progress` is used to
-    /// indicate global download progress when present.
+pub(crate) enum Current {
+    /// Waiting for a track to arrive. The optional progress can be displayed by a frontend.
     Loading(Option<downloader::Progress>),
-
-    /// A decoded track that can be played; contains the track `Info`.
+    /// A decoded track that can be played.
     Track(tracks::Info),
 }
 
 impl Default for Current {
     fn default() -> Self {
-        // By default the player starts in a loading state with no progress.
         Self::Loading(None)
     }
 }
 
 impl Current {
-    /// Returns `true` if this `Current` value represents a loading state.
-    pub const fn loading(&self) -> bool {
+    /// Returns whether playback is waiting for a track.
+    pub(crate) const fn loading(&self) -> bool {
         matches!(self, Self::Loading(_))
     }
 }
 
-/// The high-level application player.
-///
-/// `Player` composes the downloader, UI, audio sink and bookkeeping state.
-/// It owns background `Handle`s and drives the main message loop in `run`.
+/// Read-only access to live playback data for frontends.
+#[derive(Clone)]
+pub(crate) struct PlaybackView(Arc<rodio::Player>);
+
+impl PlaybackView {
+    pub(crate) fn new(player: Arc<rodio::Player>) -> Self {
+        Self(player)
+    }
+
+    pub(crate) fn volume(&self) -> f32 {
+        self.0.volume()
+    }
+    pub(crate) fn is_paused(&self) -> bool {
+        self.0.is_paused()
+    }
+    pub(crate) fn position(&self) -> Duration {
+        self.0.get_pos()
+    }
+    #[allow(dead_code)]
+    pub(crate) fn rate(&self) -> f32 {
+        self.0.speed()
+    }
+}
+
+/// Shared state frontends receive at initialization.
+#[derive(Clone)]
+pub(crate) struct State {
+    pub(crate) playback: PlaybackView,
+    pub(crate) current: Current,
+    pub(crate) bookmarked: bool,
+    #[allow(dead_code)]
+    pub(crate) track_list: String,
+}
+
+impl State {
+    pub(crate) fn initial(playback: PlaybackView, track_list: String) -> Self {
+        Self {
+            playback,
+            current: Current::default(),
+            bookmarked: false,
+            track_list,
+        }
+    }
+}
+
+/// State changes published by the playback core.
+#[derive(Debug, Clone)]
+pub(crate) enum Update {
+    Track(Current),
+    #[allow(dead_code)]
+    CanGoPrevious(bool),
+    Restarted,
+    Bookmarked(bool),
+    Volume,
+    Playback,
+    Rate,
+    Quit,
+}
+
+/// The result of handling a command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommandOutcome {
+    Applied,
+    Ignored,
+    Quit,
+}
+
+/// Session-local, compressed track history.
+#[derive(Default)]
+struct History {
+    tracks: VecDeque<tracks::Queued>,
+    current: Option<usize>,
+}
+
+impl History {
+    const CAPACITY: usize = 11;
+    const RESTART_AFTER: Duration = Duration::from_secs(3);
+    fn current(&self) -> Option<&tracks::Queued> {
+        self.current.and_then(|index| self.tracks.get(index))
+    }
+    fn previous(&mut self) -> Option<&tracks::Queued> {
+        let index = self.current?.checked_sub(1)?;
+        self.current = Some(index);
+        self.current()
+    }
+    fn next(&mut self) -> Option<&tracks::Queued> {
+        let index = self.current?.checked_add(1)?;
+        if index >= self.tracks.len() {
+            return None;
+        }
+        self.current = Some(index);
+        self.current()
+    }
+    fn push(&mut self, track: tracks::Queued) {
+        self.tracks.push_back(track);
+        self.current = Some(self.tracks.len() - 1);
+        if self.tracks.len() > Self::CAPACITY {
+            self.tracks.pop_front();
+            self.current = self.current.map(|index| index - 1);
+        }
+    }
+    fn has_previous(&self) -> bool {
+        self.current.is_some_and(|index| index > 0)
+    }
+    fn should_restart(position: Duration) -> bool {
+        position >= Self::RESTART_AFTER
+    }
+}
+
+/// The playback core.
 pub struct Player {
-    /// Persistent bookmark storage used by the player.
     bookmarks: Bookmarks,
-
-    /// Current playback state (loading or track).
     current: Current,
-
-    /// Background downloader that fills the internal queue.
     downloader: downloader::Handle,
-
-    /// Receiver for incoming `Message` commands.
-    rx: Receiver<crate::Message>,
-
-    /// Shared audio sink used for playback.
     sink: Arc<rodio::Player>,
-
-    /// UI handle for rendering and input.
-    ui: ui::Handle,
-
-    /// Notifies when a play head has been appended.
+    updates: broadcast::Sender<Update>,
     waiter: waiter::Handle,
+    history: History,
+    generation: u64,
 }
 
 impl Player {
-    /// Sets the in-memory current state and notifies the UI about the change.
-    ///
-    /// If the new state is a `Track`, this will also update the bookmarked flag
-    /// based on persistent bookmarks.
-    pub fn set_current(&mut self, current: Current) -> crate::Result<()> {
-        self.current = current.clone();
-        self.ui.update(ui::Update::Track(current))?;
+    pub(crate) async fn new(
+        bookmarks: Bookmarks,
+        downloader: downloader::Handle,
+        sink: Arc<rodio::Player>,
+        updates: broadcast::Sender<Update>,
+        waiter: waiter::Handle,
+    ) -> crate::Result<Self> {
+        Ok(Self {
+            bookmarks,
+            current: Current::default(),
+            downloader,
+            sink,
+            updates,
+            waiter,
+            history: History::default(),
+            generation: 0,
+        })
+    }
 
-        let Current::Track(track) = &self.current else {
-            return Ok(());
-        };
-
-        let bookmarked = self.bookmarks.bookmarked(track);
-        self.ui.update(ui::Update::Bookmarked(bookmarked))?;
-
+    fn publish(&self, update: Update) -> crate::Result<()> {
+        self.updates
+            .send(update)
+            .map_err(|_| crate::Error::Broadcast)?;
         Ok(())
     }
 
-    /// Initialize a `Player` with the provided CLI `args` and audio `mixer`.
-    ///
-    /// This sets up the audio sink, UI, downloader, bookmarks and persistent
-    /// volume state. The function returns a fully constructed `Player` ready
-    /// to be driven via `run`.
-    pub async fn init(
-        settings: crate::config::Settings,
-        bindings: crate::config::BindingMap,
-        mixer: &rodio::mixer::Mixer,
-    ) -> crate::Result<(Self, crate::Tasks)> {
-        let (tx, rx) = mpsc::channel(8);
-        let mut tasks = Tasks::new(tx.clone());
-        if settings.playback.paused {
-            tx.send(Message::Pause).await?;
+    fn set_current(&mut self, current: Current) -> crate::Result<()> {
+        self.current = current.clone();
+        self.publish(Update::Track(current))?;
+        if let Current::Track(track) = &self.current {
+            let bookmarked = self.bookmarks.bookmarked(track);
+            self.publish(Update::Bookmarked(bookmarked))?;
         }
-
-        tx.send(Message::Init).await?;
-        let list = List::load(settings.playback.track_list.as_ref()).await?;
-
-        let sink = Arc::new(rodio::Player::connect_new(mixer));
-        let state = ui::State::initial(Arc::clone(&sink), list.name.clone());
-
-        let volume = PersistentVolume::load().await?;
-        sink.set_volume(volume.float());
-
-        let ui = tasks.ui(state, &settings, bindings).await?;
-        let player = Self {
-            downloader: tasks.downloader(&settings, ui.logger(), list)?,
-            ui,
-            waiter: tasks.waiter(Arc::clone(&sink)),
-            bookmarks: Bookmarks::load().await?,
-            current: Current::default(),
-            rx,
-            sink,
-        };
-
-        Ok((player, tasks))
+        Ok(())
     }
 
-    /// Close any outlying processes, as well as persist state that
-    /// should survive such as bookmarks and volume.
+    /// Close background playback and persist player-owned data.
     pub async fn close(self) -> crate::Result<()> {
         self.sink.stop();
         self.bookmarks.save().await?;
         PersistentVolume::save(self.sink.volume()).await?;
-
         Ok(())
     }
 
-    /// Play a queued track by decoding, appending to the sink and notifying
-    /// other subsystems that playback has changed.
-    pub fn play(&mut self, queued: tracks::Queued) -> crate::Result<()> {
+    fn can_go_previous(&self) -> bool {
+        self.history.has_previous()
+            || matches!(self.current, Current::Track(_))
+                && History::should_restart(self.sink.get_pos())
+            || self.current.loading() && self.history.current().is_some()
+    }
+
+    fn update_previous_capability(&self) -> crate::Result<()> {
+        self.publish(Update::CanGoPrevious(self.can_go_previous()))
+    }
+
+    fn play(&mut self, queued: tracks::Queued) -> crate::Result<()> {
         let decoded = queued.decode()?;
+        let paused = self.sink.is_paused();
+        self.sink.stop();
         self.sink.append(decoded.data);
+        if paused {
+            self.sink.pause();
+        }
         self.set_current(Current::Track(decoded.info))?;
-        self.waiter.notify();
-
+        self.generation = self.generation.wrapping_add(1);
+        self.waiter.notify(self.generation);
+        self.update_previous_capability()?;
         Ok(())
     }
 
-    /// Drives the main message loop of the player.
-    ///
-    /// This will return when a `Message::Quit` is received. It handles commands
-    /// coming from the frontend and updates playback/UI state accordingly.
-    pub async fn run(&mut self) -> crate::Result<()> {
-        while let Some(message) = self.rx.recv().await {
-            match message {
-                Message::Next | Message::Init | Message::Loaded => {
-                    if message == Message::Next && self.current.loading() {
-                        continue;
-                    }
+    fn play_current_history(&mut self) -> crate::Result<bool> {
+        let Some(track) = self.history.current().cloned() else {
+            return Ok(false);
+        };
+        self.play(track)?;
+        Ok(true)
+    }
 
-                    self.sink.stop();
-                    match self.downloader.track() {
-                        downloader::Output::Loading(progress) => {
-                            self.set_current(Current::Loading(progress))?;
-                        }
-                        downloader::Output::Queued(queued) => self.play(queued)?,
-                    }
-                }
-                Message::Play => {
-                    self.sink.play();
-                }
-                Message::Pause => {
-                    self.sink.pause();
-                }
-                Message::PlayPause => {
-                    if self.sink.is_paused() {
-                        self.sink.play();
-                    } else {
-                        self.sink.pause();
-                    }
-                }
-                Message::ChangeVolume(change) => {
-                    self.sink
-                        .set_volume((self.sink.volume() + change).clamp(0.0, 1.0));
-                    self.ui.update(ui::Update::Volume)?;
-                }
-                Message::SetVolume(set) => {
-                    self.sink.set_volume(set.clamp(0.0, 1.0));
-                    self.ui.update(ui::Update::Volume)?;
-                }
-                Message::Bookmark => {
-                    let Current::Track(current) = &self.current else {
-                        continue;
-                    };
-
-                    let bookmarked = self.bookmarks.bookmark(current)?;
-                    self.ui.update(ui::Update::Bookmarked(bookmarked))?;
-                }
-                Message::Quit => break,
+    fn advance(&mut self) -> crate::Result<()> {
+        if let Some(track) = self.history.next().cloned() {
+            return self.play(track);
+        }
+        match self.downloader.track() {
+            downloader::Output::Loading(progress) => {
+                self.sink.stop();
+                self.set_current(Current::Loading(progress))?;
+                self.update_previous_capability()?;
             }
-
-            #[cfg(feature = "mpris")]
-            self.ui.mpris.handle(&message).await?;
-
-            #[cfg(all(feature = "media-controls", windows))]
-            if let Some(controls) = self.ui.media_controls.as_mut() {
-                controls.handle(&message)?;
+            downloader::Output::Queued(queued) => {
+                self.history.push(queued);
+                self.play_current_history()?;
             }
         }
-
         Ok(())
+    }
+
+    fn previous(&mut self) -> crate::Result<()> {
+        if self.current.loading() {
+            let _ = self.play_current_history()?;
+        } else if History::should_restart(self.sink.get_pos()) {
+            let _ = self.play_current_history()?;
+            self.publish(Update::Restarted)?;
+        } else if let Some(track) = self.history.previous().cloned() {
+            self.play(track)?;
+        }
+        self.update_previous_capability()
+    }
+
+    /// Applies one command and publishes its observable state updates.
+    pub(crate) fn handle(&mut self, message: Message) -> crate::Result<CommandOutcome> {
+        match message {
+            Message::Next if self.current.loading() => return Ok(CommandOutcome::Ignored),
+            Message::Next | Message::Init => self.advance()?,
+            Message::Loaded if self.current.loading() => self.advance()?,
+            Message::Loaded => return Ok(CommandOutcome::Ignored),
+            Message::Finished(generation) if generation == self.generation => self.advance()?,
+            Message::Finished(_) => return Ok(CommandOutcome::Ignored),
+            Message::Previous => self.previous()?,
+            Message::PreviousAvailable(generation) if generation == self.generation => {
+                self.update_previous_capability()?
+            }
+            Message::PreviousAvailable(_) => return Ok(CommandOutcome::Ignored),
+            Message::Play => {
+                self.sink.play();
+                self.publish(Update::Playback)?;
+            }
+            Message::Pause => {
+                self.sink.pause();
+                self.publish(Update::Playback)?;
+            }
+            Message::PlayPause => {
+                if self.sink.is_paused() {
+                    self.sink.play();
+                } else {
+                    self.sink.pause();
+                }
+                self.publish(Update::Playback)?;
+            }
+            Message::ChangeVolume(change) => {
+                self.sink
+                    .set_volume((self.sink.volume() + change).clamp(0.0, 1.0));
+                self.publish(Update::Volume)?;
+            }
+            Message::SetVolume(volume) => {
+                self.sink.set_volume(volume.clamp(0.0, 1.0));
+                self.publish(Update::Volume)?;
+            }
+            Message::SetRate(rate) => {
+                self.sink.set_speed(rate);
+                self.publish(Update::Rate)?;
+            }
+            Message::Bookmark => {
+                let Current::Track(current) = &self.current else {
+                    return Ok(CommandOutcome::Ignored);
+                };
+                let bookmarked = self.bookmarks.bookmark(current)?;
+                self.publish(Update::Bookmarked(bookmarked))?;
+            }
+            Message::Quit => {
+                self.publish(Update::Quit)?;
+                return Ok(CommandOutcome::Quit);
+            }
+        }
+        Ok(CommandOutcome::Applied)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommandOutcome, History, Player, Update};
+    use crate::{audio::waiter, bookmark::Bookmarks, downloader, tracks::Queued, Message};
+    use bytes::Bytes;
+    use std::time::Duration;
+
+    fn track(name: &str) -> Queued {
+        Queued::new(name.into(), Bytes::from_static(b"audio"), Some(name.into())).unwrap()
+    }
+
+    fn player() -> (Player, tokio::sync::broadcast::Receiver<Update>) {
+        let (updates, receiver) = tokio::sync::broadcast::channel(8);
+        let (sink, _) = rodio::Player::new();
+        (
+            Player {
+                bookmarks: Bookmarks {
+                    entries: Vec::new(),
+                },
+                current: Default::default(),
+                downloader: downloader::Handle::empty(),
+                sink: std::sync::Arc::new(sink),
+                updates,
+                waiter: waiter::Handle::idle(),
+                history: Default::default(),
+                generation: 0,
+            },
+            receiver,
+        )
+    }
+
+    #[test]
+    fn playback_volume_and_rate_publish_ordered_updates() {
+        let (mut player, mut first) = player();
+        let mut second = first.resubscribe();
+
+        assert_eq!(
+            player.handle(Message::Pause).unwrap(),
+            CommandOutcome::Applied
+        );
+        assert!(player.sink.is_paused());
+        assert_eq!(
+            player.handle(Message::ChangeVolume(-2.0)).unwrap(),
+            CommandOutcome::Applied
+        );
+        assert_eq!(player.sink.volume(), 0.0);
+        assert_eq!(
+            player.handle(Message::SetRate(1.5)).unwrap(),
+            CommandOutcome::Applied
+        );
+        assert_eq!(player.sink.speed(), 1.5);
+
+        for receiver in [&mut first, &mut second] {
+            assert!(matches!(receiver.try_recv(), Ok(Update::Playback)));
+            assert!(matches!(receiver.try_recv(), Ok(Update::Volume)));
+            assert!(matches!(receiver.try_recv(), Ok(Update::Rate)));
+        }
+    }
+
+    #[test]
+    fn loading_bookmark_is_ignored_and_quit_stops_dispatch() {
+        let (mut player, mut receiver) = player();
+        assert_eq!(
+            player.handle(Message::Bookmark).unwrap(),
+            CommandOutcome::Ignored
+        );
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(player.handle(Message::Quit).unwrap(), CommandOutcome::Quit);
+        assert!(matches!(receiver.try_recv(), Ok(Update::Quit)));
+    }
+
+    #[test]
+    fn publishing_without_a_subscriber_is_an_error() {
+        let (mut player, receiver) = player();
+        drop(receiver);
+        assert!(player.handle(Message::Pause).is_err());
+    }
+
+    #[test]
+    fn history_is_bounded_and_evicts_oldest_track() {
+        let mut history = History::default();
+        for index in 0..=History::CAPACITY {
+            history.push(track(&index.to_string()));
+        }
+        assert_eq!(history.tracks.len(), History::CAPACITY);
+        assert_eq!(
+            history.current().unwrap().display,
+            History::CAPACITY.to_string()
+        );
+        assert_eq!(
+            history.previous().unwrap().display,
+            (History::CAPACITY - 1).to_string()
+        );
+        while history.previous().is_some() {}
+        assert_eq!(history.current().unwrap().display, "1");
+    }
+
+    #[test]
+    fn history_keeps_forward_entries_after_going_back() {
+        let mut history = History::default();
+        history.push(track("one"));
+        history.push(track("two"));
+        history.push(track("three"));
+        assert_eq!(history.previous().unwrap().display, "two");
+        assert_eq!(history.next().unwrap().display, "three");
+        assert!(history.next().is_none());
+    }
+
+    #[test]
+    fn history_has_no_previous_at_startup() {
+        let mut history = History::default();
+        assert!(history.current().is_none());
+        assert!(history.previous().is_none());
+        assert!(!history.has_previous());
+    }
+
+    #[test]
+    fn previous_restart_threshold_is_three_seconds() {
+        assert!(!History::should_restart(Duration::from_millis(2999)));
+        assert!(History::should_restart(Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn history_returns_to_skipped_track_before_downloading() {
+        let mut history = History::default();
+        history.push(track("one"));
+        history.push(track("two"));
+        history.push(track("three"));
+        assert_eq!(history.previous().unwrap().display, "two");
+        assert_eq!(history.previous().unwrap().display, "one");
+        assert_eq!(history.next().unwrap().display, "two");
+        assert_eq!(history.next().unwrap().display, "three");
+        assert_eq!(history.tracks.len(), 3);
     }
 }

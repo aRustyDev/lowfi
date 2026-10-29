@@ -169,6 +169,12 @@ pub enum Output {
 }
 
 impl Handle {
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        let (_sender, queue) = mpsc::channel(1);
+        Self { queue }
+    }
+
     /// Gets either a queued track, or a progress report,
     /// depending on the state of the internal download buffer.
     #[rustfmt::skip]

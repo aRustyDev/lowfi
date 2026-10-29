@@ -1,9 +1,9 @@
 //! An extremely simple lofi player.
 
-use crate::player::Player;
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 
+mod app;
 pub mod audio;
 pub mod bookmark;
 pub mod config;
@@ -114,37 +114,64 @@ pub fn data_dir() -> crate::Result<PathBuf> {
 /// Parses CLI arguments, initializes the audio stream and player, then
 /// runs the main event loop. On exit it performs cleanup of the UI and
 /// returns the inner result.
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> eyre::Result<()> {
+fn main() -> eyre::Result<()> {
     let args = Args::parse();
 
     #[cfg(feature = "scrape")]
     if let Some(command) = &args.command {
-        return match command {
+        return runtime()?.block_on(match command {
             Commands::Scrape { source } => match source {
                 Source::Lofigirl => scrapers::lofigirl::scrape().await,
                 Source::Chillhop => scrapers::chillhop::scrape().await,
             },
-        };
+        });
     }
 
     let config_path = data_dir()?.join("config.toml");
     let overrides = config::CliOverrides::from_args(&args, &Args::command().get_matches());
     let (settings, bindings) = config::load(&config_path, overrides)?;
+    let terminal = settings.interfaces.mode.terminal() && !env("LOWFI_DISABLE_UI");
 
+    if !terminal {
+        return Err(ui::Error::RejectedDisable.into());
+    }
+
+    runtime()?.block_on(run(settings, bindings, terminal))?;
+    Ok(())
+}
+
+fn runtime() -> eyre::Result<tokio::runtime::Runtime> {
+    Ok(tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?)
+}
+
+/// Runs the shared player lifecycle for terminal and native frontends.
+async fn run(
+    settings: config::Settings,
+    bindings: config::BindingMap,
+    terminal: bool,
+) -> Result<()> {
     let stream = audio::stream()?;
-    let environment = ui::Environment::ready(&settings)?;
-    let (mut player, tasks) = Player::init(settings, bindings, stream.mixer())
-        .await
-        .inspect_err(|_| environment.cleanup(false).unwrap())?;
+    let environment = terminal
+        .then(|| ui::Environment::ready(&settings))
+        .transpose()?;
+    let mut application =
+        match app::Application::init(settings, bindings, stream.mixer(), terminal).await {
+            Ok(player) => player,
+            Err(error) => {
+                if let Some(environment) = environment {
+                    environment.cleanup(false)?;
+                }
+                return Err(error);
+            }
+        };
 
-    let result = tokio::select! {
-        r = player.run() => r,
-        r = tasks => r,
-    };
+    let result = application.run().await;
 
-    environment.cleanup(result.is_ok())?;
-    player.close().await?;
-
-    Ok(result?)
+    if let Some(environment) = environment {
+        environment.cleanup(result.is_ok())?;
+    }
+    application.close().await?;
+    result
 }

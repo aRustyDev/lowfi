@@ -29,6 +29,9 @@ pub enum Message {
     /// Set the volume of playback, rather than changing it.
     SetVolume(f32),
 
+    /// Set the playback rate.
+    SetRate(f32),
+
     /// Bookmark the current track.
     Bookmark,
 

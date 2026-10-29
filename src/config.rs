@@ -20,6 +20,7 @@ use crate::Message;
 pub struct Settings {
     pub playback: Playback,
     pub ui: Ui,
+    pub interfaces: Interfaces,
     pub bindings: Bindings,
 }
 
@@ -42,6 +43,33 @@ pub struct Ui {
     pub clock: bool,
     pub fps: u8,
     pub width: usize,
+}
+
+/// Which local interfaces should be started with the player.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InterfaceMode {
+    Terminal,
+    TerminalAndMenubar,
+    Menubar,
+}
+
+impl InterfaceMode {
+    pub const fn terminal(self) -> bool {
+        matches!(self, Self::Terminal | Self::TerminalAndMenubar)
+    }
+
+    pub const fn menubar(self) -> bool {
+        matches!(self, Self::Menubar | Self::TerminalAndMenubar)
+    }
+}
+
+/// Frontend configuration. The menu bar variants are available only on macOS
+/// builds compiled with the `menubar` feature.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Interfaces {
+    pub mode: InterfaceMode,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -74,6 +102,13 @@ impl Default for Settings {
                 clock: false,
                 fps: 12,
                 width: 3,
+            },
+            interfaces: Interfaces {
+                mode: if cfg!(all(target_os = "macos", feature = "menubar")) {
+                    InterfaceMode::TerminalAndMenubar
+                } else {
+                    InterfaceMode::Terminal
+                },
             },
             bindings: Bindings {
                 play_pause: vec!["p".into(), "Space".into()],
@@ -230,6 +265,14 @@ fn validate_settings(settings: &Settings, figment: &Figment, path: &Path) -> Res
         return Err(invalid(
             "playback.buffer_size",
             "must be at least 2",
+            figment,
+            path,
+        ));
+    }
+    if settings.interfaces.mode.menubar() && !cfg!(all(target_os = "macos", feature = "menubar")) {
+        return Err(invalid(
+            "interfaces.mode",
+            "menu bar modes require a macOS build with the `menubar` feature",
             figment,
             path,
         ));
