@@ -42,7 +42,7 @@ impl Server {
     }
 
     /// Creates SMTC controls, or `None` if registration fails (playback continues).
-    pub fn try_new(
+    pub(crate) fn try_new(
         state: State,
         sender: mpsc::Sender<Message>,
         receiver: broadcast::Receiver<Update>,
