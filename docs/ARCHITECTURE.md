@@ -15,5 +15,11 @@ Linux MPRIS and Windows media controls retain their current feature gates and
 implementations. The macOS adapter exposes only Play/Pause and Next; Lowfi does
 not offer playback history through that interface.
 
-Future work: Spotlight integration, app bundles, signing, notarization,
-launchd lifecycle management, and IPC for independently attached clients.
+The optional `macos-app` feature builds a small bundle launcher rather than a
+new frontend. `Lowfi.app` starts the existing terminal player in Terminal.app;
+the bundled command script resolves the adjacent `lowfi` executable at runtime,
+so the bundle continues to work after it is moved or renamed.
+
+Future work: signing, notarization, launchd lifecycle management, IPC for
+independently attached clients, Windows Start-menu packaging, and Linux
+`.desktop` integration.

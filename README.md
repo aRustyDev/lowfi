@@ -179,6 +179,42 @@ Lowfi attempts to register macOS Now Playing controls for Play, Pause, Toggle,
 and Next. Registration failures are reported to stderr and playback continues.
 Previous, seek, and skip-back are deliberately unavailable from this interface.
 
+### macOS application bundle
+
+On macOS, create a Finder- and Spotlight-discoverable application bundle with:
+
+```sh
+packaging/macos/build-app.sh
+```
+
+The script requires Rust and macOS's `plutil` utility. It writes `Lowfi.app` to
+`target/<native-target>/release/bundle/Lowfi.app`; it does not install or sign
+the app. To install it for the current machine:
+
+```sh
+cp -R target/"$(rustc -vV | sed -n 's/^host: //p')"/release/bundle/Lowfi.app /Applications/
+open /Applications/Lowfi.app
+```
+
+Finder and Spotlight discover applications placed in `/Applications`. Launching
+Lowfi.app opens the existing terminal interface in Terminal.app, so its controls
+and configuration behave exactly as they do for `lowfi`. To supply command-line
+flags, run the bundled executable directly, for example:
+
+```sh
+/Applications/Lowfi.app/Contents/MacOS/lowfi --paused
+```
+
+macOS usually registers an application when Finder sees it or after the next
+login. If Spotlight has not indexed a newly copied bundle, open it once in
+Finder; developers can also force Launch Services registration with
+`lsregister -f /Applications/Lowfi.app`.
+
+`packaging/macos/Lowfi.png` and `Lowfi.icns` are generated from the existing
+white `docs/media/logo.svg` on a dark neutral background: render it at 1024×1024
+with `rsvg-convert`, create the standard `.iconset` PNG sizes with `sips`, then
+run `iconutil -c icns Lowfi.iconset -o Lowfi.icns`.
+
 ### Playback history
 
 Lowfi retains the last 11 downloaded tracks for the current session as compressed
