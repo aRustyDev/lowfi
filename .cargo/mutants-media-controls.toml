@@ -3,7 +3,9 @@
 examine_globs = ["src/ui/media_controls.rs"]
 exclude_globs = ["packaging/**", "src/tests/**", "tests/**", "target/**"]
 exclude_re = [
-    "^src/ui/media_controls\\.rs:.*(try_new|create|handle|sync_playback|sync_metadata|Drop for Server|windows::)",
+    "Server::(try_new|create|handle|sync_playback|sync_metadata)",
+    "Drop for Server",
+    "windows::",
 ]
 additional_cargo_args = ["--locked"]
 test_tool = "nextest"

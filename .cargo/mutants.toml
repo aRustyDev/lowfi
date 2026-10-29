@@ -14,7 +14,7 @@ exclude_globs = [
 ]
 # EventStream owns a terminal event loop and cannot be exercised without a
 # terminal. `message_for` below it remains in scope.
-exclude_re = ["^src/ui/input\\.rs:.*listen"]
+exclude_re = ["EventStream::listen"]
 additional_cargo_args = ["--locked"]
 test_tool = "nextest"
 minimum_test_timeout = 20
