@@ -16,6 +16,7 @@ keywords = ["lowfi", "lofi", "music"]
 documentation = "https://github.com/talwat/lowfi"
 homepage = "https://github.com/talwat/lowfi"
 repository = "https://github.com/talwat/lowfi"
+default-run = "lowfi"
 
 [features]
 default = ["default-tracklist"]
@@ -24,6 +25,8 @@ mpris = ["dep:mpris-server", "dep:arc-swap"]
 # Windows System Media Transport Controls (hardware media keys / overlay).
 media-controls = ["dep:souvlaki", "dep:windows"]
 menubar = ["dep:tao", "dep:tray-icon", "dep:objc2-media-player"]
+# Builds the macOS application-bundle launcher. Packaging remains opt-in.
+macos-app = []
 extra-audio-formats = ["rodio/default"]
 scrape = [
     "dep:serde_json",
@@ -31,6 +34,11 @@ scrape = [
     "dep:scraper",
     "dep:indicatif",
 ]
+
+[[bin]]
+name = "lowfi-app-launcher"
+path = "packaging/macos/launcher.rs"
+required-features = ["macos-app"]
 
 [dependencies]
 # Basics
