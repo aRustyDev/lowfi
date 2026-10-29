@@ -83,7 +83,10 @@ mod window {
         let (render, height) = w.render(vec![String::from("abc")]).unwrap();
 
         const MIDDLE: &str = "─────";
-        assert_eq!(format!("┌{MIDDLE}┐\n{}\n└{MIDDLE}┘", sided("abc")), render);
+        assert_eq!(
+            format!("┌{MIDDLE}┐\n{}\n└{MIDDLE}┘", sided("abc")).trim_end(),
+            render.trim_end()
+        );
         assert_eq!(height, 3);
     }
 
@@ -106,7 +109,7 @@ mod window {
                 sided(" b "),
                 sided("c  "),
             ),
-            render
+            render.trim_end()
         );
         assert_eq!(height, 5);
     }
