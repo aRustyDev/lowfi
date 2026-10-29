@@ -6,6 +6,15 @@ pub enum Message {
     /// song is over by the waiter.
     Next,
 
+    /// Go to the previous retained track or restart the current track.
+    Previous,
+
+    /// Completion for a particular playback generation.
+    Finished(u64),
+
+    /// Signals that Previous is available for a playback generation.
+    PreviousAvailable(u64),
+
     /// When a track is loaded after the caller previously being told to wait.
     /// If a track is taken from the queue, then there is no waiting, so this
     /// is never actually sent.

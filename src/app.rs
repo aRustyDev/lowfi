@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::{
     bookmark::Bookmarks,
     config,
-    player::{CommandOutcome, PlaybackView, Player, State, Update},
+    player::{self, CommandOutcome, PlaybackView, Player, State, Update},
     tracks, ui,
     volume::PersistentVolume,
     Message, Tasks,
@@ -17,6 +17,11 @@ pub(crate) struct Application {
     player: Player,
     tasks: Tasks,
     commands: mpsc::Receiver<Message>,
+    #[cfg_attr(not(all(feature = "menubar", target_os = "macos")), allow(dead_code))]
+    sender: mpsc::Sender<Message>,
+    #[cfg_attr(not(all(feature = "menubar", target_os = "macos")), allow(dead_code))]
+    snapshot: watch::Sender<player::PlaybackSnapshot>,
+    track_list: String,
     #[allow(dead_code)]
     updates: broadcast::Receiver<Update>,
     #[cfg(feature = "mpris")]
@@ -39,7 +44,8 @@ impl Application {
         let list = tracks::List::load(&settings.playback.track_list).await?;
         let sink = Arc::new(rodio::Player::connect_new(mixer));
         sink.set_volume(PersistentVolume::load().await?.float());
-        let state = State::initial(PlaybackView::new(Arc::clone(&sink)), list.name.clone());
+        let track_list = list.name.clone();
+        let state = State::initial(PlaybackView::new(Arc::clone(&sink)), track_list.clone());
 
         let logger = ui::init::terminal(
             &mut tasks,
@@ -64,6 +70,7 @@ impl Application {
         let waiter = tasks.waiter(Arc::clone(&sink));
         let player =
             Player::new(Bookmarks::load().await?, downloader, sink, updates, waiter).await?;
+        let (snapshot, _) = watch::channel(player.snapshot(track_list.clone()));
 
         if settings.playback.paused {
             sender.send(Message::Pause).await?;
@@ -74,12 +81,30 @@ impl Application {
             player,
             tasks,
             commands,
+            sender,
+            snapshot,
+            track_list,
             updates: receiver,
             #[cfg(feature = "mpris")]
             mpris,
             #[cfg(all(feature = "media-controls", windows))]
             media_controls,
         })
+    }
+
+    #[cfg_attr(not(all(feature = "menubar", target_os = "macos")), allow(dead_code))]
+    pub(crate) fn sender(&self) -> mpsc::Sender<Message> {
+        self.sender.clone()
+    }
+
+    #[cfg_attr(not(all(feature = "menubar", target_os = "macos")), allow(dead_code))]
+    pub(crate) fn subscribe(&self) -> watch::Receiver<player::PlaybackSnapshot> {
+        self.snapshot.subscribe()
+    }
+
+    fn publish_snapshot(&self) {
+        self.snapshot
+            .send_replace(self.player.snapshot(self.track_list.clone()));
     }
 
     pub(crate) async fn run(&mut self) -> crate::Result<()> {
@@ -90,6 +115,7 @@ impl Application {
                     let Some(message) = message else { return Ok(()) };
                     match self.player.handle(message)? {
                         CommandOutcome::Applied => {
+                            self.publish_snapshot();
                             #[cfg(feature = "mpris")]
                             self.mpris.handle(&message).await?;
                             #[cfg(all(feature = "media-controls", windows))]

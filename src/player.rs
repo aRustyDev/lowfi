@@ -30,6 +30,20 @@ impl Current {
     }
 }
 
+/// Immutable state used by optional native frontends.
+#[cfg_attr(not(all(feature = "menubar", target_os = "macos")), allow(dead_code))]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PlaybackSnapshot {
+    pub(crate) title: Option<String>,
+    #[allow(dead_code)]
+    pub(crate) duration: Option<Duration>,
+    pub(crate) loading: bool,
+    pub(crate) paused: bool,
+    #[allow(dead_code)]
+    pub(crate) position: Duration,
+    pub(crate) track_list: String,
+}
+
 /// Read-only access to live playback data for frontends.
 #[derive(Clone)]
 pub(crate) struct PlaybackView(Arc<rodio::Player>);
@@ -171,6 +185,21 @@ impl Player {
         })
     }
 
+    pub(crate) fn snapshot(&self, track_list: String) -> PlaybackSnapshot {
+        let (title, duration, loading) = match &self.current {
+            Current::Loading(_) => (None, None, true),
+            Current::Track(track) => (Some(track.display.clone()), track.duration, false),
+        };
+        PlaybackSnapshot {
+            title,
+            duration,
+            loading,
+            paused: self.sink.is_paused(),
+            position: self.sink.get_pos(),
+            track_list,
+        }
+    }
+
     fn publish(&self, update: Update) -> crate::Result<()> {
         self.updates
             .send(update)
@@ -217,7 +246,7 @@ impl Player {
         }
         self.set_current(Current::Track(decoded.info))?;
         self.generation = self.generation.wrapping_add(1);
-        self.waiter.notify(self.generation);
+        self.waiter.notify();
         self.update_previous_capability()?;
         Ok(())
     }

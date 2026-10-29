@@ -35,8 +35,9 @@ pub struct Handle {
 impl Handle {
     #[cfg(test)]
     pub(crate) fn idle() -> Self {
-        let (notifications, _receiver) = mpsc::unbounded_channel();
-        Self { notifications }
+        Self {
+            notify: Arc::new(Notify::new()),
+        }
     }
 
     /// Notify the waiter that playback state may have changed and it should

@@ -434,6 +434,32 @@ mod tests {
     }
 
     #[test]
+    fn interface_mode_accepts_environment_override() {
+        Jail::expect_with(|jail| {
+            jail.set_env("LOWFI_INTERFACES__MODE", "terminal");
+            assert_eq!(
+                load(Path::new("missing.toml"), CliOverrides::default())
+                    .unwrap()
+                    .0
+                    .interfaces
+                    .mode,
+                InterfaceMode::Terminal
+            );
+            Ok(())
+        });
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "menubar")))]
+    #[test]
+    fn menu_mode_requires_the_macos_feature() {
+        Jail::expect_with(|jail| {
+            jail.create_file("config.toml", "[interfaces]\nmode = \"menubar\"\n")?;
+            assert!(load(Path::new("config.toml"), CliOverrides::default()).is_err());
+            Ok(())
+        });
+    }
+
+    #[test]
     fn invalid_and_duplicate_bindings_are_rejected() {
         Jail::expect_with(|jail| {
             jail.create_file("config.toml", "[bindings]\nnext = [\"q\"]\n")?;
