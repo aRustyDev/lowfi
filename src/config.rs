@@ -26,6 +26,7 @@ use crate::Message;
 pub struct Settings {
     pub playback: Playback,
     pub ui: Ui,
+    pub interfaces: Interfaces,
     pub bindings: Bindings,
 }
 
@@ -50,6 +51,33 @@ pub struct Ui {
     pub fps: u8,
     /// Sizing parameter, not terminal columns; the renderer caps it at 32.
     pub width: usize,
+}
+
+/// Which local interfaces should be started with the player.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InterfaceMode {
+    Terminal,
+    TerminalAndMenubar,
+    Menubar,
+}
+
+impl InterfaceMode {
+    pub const fn terminal(self) -> bool {
+        matches!(self, Self::Terminal | Self::TerminalAndMenubar)
+    }
+
+    pub const fn menubar(self) -> bool {
+        matches!(self, Self::Menubar | Self::TerminalAndMenubar)
+    }
+}
+
+/// Frontend configuration. The menu bar variants are available only on macOS
+/// builds compiled with the `menubar` feature.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Interfaces {
+    pub mode: InterfaceMode,
 }
 
 /// Configurable terminal keys, grouped by action.
@@ -88,6 +116,13 @@ impl Default for Settings {
                 clock: false,
                 fps: 12,
                 width: 3,
+            },
+            interfaces: Interfaces {
+                mode: if cfg!(all(target_os = "macos", feature = "menubar")) {
+                    InterfaceMode::TerminalAndMenubar
+                } else {
+                    InterfaceMode::Terminal
+                },
             },
             bindings: Bindings {
                 play_pause: vec!["p".into(), "Space".into()],
@@ -266,6 +301,14 @@ fn validate_settings(settings: &Settings, figment: &Figment, path: &Path) -> Res
         return Err(invalid(
             "playback.buffer_size",
             "must be at least 2",
+            figment,
+            path,
+        ));
+    }
+    if settings.interfaces.mode.menubar() && !cfg!(all(target_os = "macos", feature = "menubar")) {
+        return Err(invalid(
+            "interfaces.mode",
+            "menu bar modes require a macOS build with the `menubar` feature",
             figment,
             path,
         ));
@@ -449,6 +492,58 @@ mod tests {
     }
 
     #[test]
+    fn interface_mode_accepts_environment_override() {
+        Jail::expect_with(|jail| {
+            jail.set_env("LOWFI_INTERFACES__MODE", "terminal");
+            assert_eq!(
+                load(Path::new("missing.toml"), CliOverrides::default())
+                    .unwrap()
+                    .0
+                    .interfaces
+                    .mode,
+                InterfaceMode::Terminal
+            );
+            Ok(())
+        });
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "menubar")))]
+    #[test]
+    fn menu_mode_requires_the_macos_feature() {
+        Jail::expect_with(|jail| {
+            jail.create_file("config.toml", "[interfaces]\nmode = \"menubar\"\n")?;
+            assert!(load(Path::new("config.toml"), CliOverrides::default()).is_err());
+            Ok(())
+        });
+    }
+
+    #[cfg(all(target_os = "macos", feature = "menubar"))]
+    #[test]
+    fn menu_modes_load_on_macos_with_the_menubar_feature() {
+        Jail::expect_with(|jail| {
+            for (name, mode) in [
+                ("menu.toml", "menubar"),
+                ("both.toml", "terminal-and-menubar"),
+            ] {
+                jail.create_file(name, &format!("[interfaces]\nmode = \"{mode}\"\n"))?;
+                assert_eq!(
+                    load(Path::new(name), CliOverrides::default())
+                        .unwrap()
+                        .0
+                        .interfaces
+                        .mode,
+                    if mode == "menubar" {
+                        InterfaceMode::Menubar
+                    } else {
+                        InterfaceMode::TerminalAndMenubar
+                    }
+                );
+            }
+            Ok(())
+        });
+    }
+
+    #[test]
     fn invalid_and_duplicate_bindings_are_rejected() {
         Jail::expect_with(|jail| {
             jail.create_file("config.toml", "[bindings]\nnext = [\"q\"]\n")?;
@@ -568,6 +663,16 @@ mod tests {
             assert_eq!(load_cli(&["lowfi", "--width", "9"]).ui.width, 9);
             Ok(())
         });
+    }
+
+    #[test]
+    fn interface_mode_helpers_preserve_terminal_and_menu_choices() {
+        assert!(InterfaceMode::Terminal.terminal());
+        assert!(!InterfaceMode::Terminal.menubar());
+        assert!(InterfaceMode::TerminalAndMenubar.terminal());
+        assert!(InterfaceMode::TerminalAndMenubar.menubar());
+        assert!(!InterfaceMode::Menubar.terminal());
+        assert!(InterfaceMode::Menubar.menubar());
     }
 
     #[test]

@@ -31,6 +31,21 @@ impl Current {
     }
 }
 
+/// Immutable state used by optional native frontends.
+#[cfg_attr(not(all(feature = "menubar", target_os = "macos")), allow(dead_code))]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PlaybackSnapshot {
+    pub(crate) title: Option<String>,
+    #[allow(dead_code)]
+    pub(crate) duration: Option<Duration>,
+    pub(crate) loading: bool,
+    pub(crate) paused: bool,
+    /// Playhead sampled when this snapshot was produced; it does not advance afterward.
+    #[allow(dead_code)]
+    pub(crate) position: Duration,
+    pub(crate) track_list: String,
+}
+
 /// Live, read-only audio state shared by frontends.
 ///
 /// Cloning this view shares the player; it does not snapshot its values. Send
@@ -142,6 +157,21 @@ impl Player {
             history: History::default(),
             generation: 0,
         })
+    }
+
+    pub(crate) fn snapshot(&self, track_list: String) -> PlaybackSnapshot {
+        let (title, duration, loading) = match &self.current {
+            Current::Loading(_) => (None, None, true),
+            Current::Track(track) => (Some(track.display.clone()), track.duration, false),
+        };
+        PlaybackSnapshot {
+            title,
+            duration,
+            loading,
+            paused: self.sink.is_paused(),
+            position: self.sink.get_pos(),
+            track_list,
+        }
     }
 
     fn publish(&self, update: Update) -> crate::Result<()> {
@@ -435,6 +465,9 @@ mod tests {
     fn loading_guards_and_playback_view_reflect_live_state() {
         let tracks = [fixture::queued("one"), fixture::queued("two")];
         let (mut player, mut updates, mut output) = player_with_tracks(tracks);
+        let loading = player.snapshot("queue".into());
+        assert!(loading.loading);
+        assert!(loading.title.is_none());
 
         assert_eq!(
             player.handle(Message::Next).unwrap(),
@@ -451,6 +484,9 @@ mod tests {
         let playback = PlaybackView::new(player.sink.clone());
         assert!(playback.position() > Duration::ZERO);
         assert!(!player.current.loading());
+        let playing = player.snapshot("queue".into());
+        assert!(!playing.loading);
+        assert_eq!(playing.title.as_deref(), Some("one"));
     }
 
     #[test]
@@ -696,5 +732,23 @@ mod tests {
             updates.try_recv(),
             Ok(Update::CanGoPrevious(true))
         ));
+    }
+
+    #[test]
+    fn snapshots_follow_playback_without_changing_the_terminal() {
+        let (mut player, _updates, mut output) = player_with_tracks([fixture::queued("snapshot")]);
+        let snapshot = player.snapshot("list".into());
+        assert!(snapshot.loading);
+        assert!(snapshot.title.is_none());
+        player.handle(Message::Init).unwrap();
+        render(&mut output, 1_024);
+        player.handle(Message::Pause).unwrap();
+        let snapshot = player.snapshot("list".into());
+        assert_eq!(snapshot.title.as_deref(), Some("snapshot"));
+        assert_eq!(snapshot.track_list, "list");
+        assert!(!snapshot.loading);
+        assert!(snapshot.paused);
+        assert!(snapshot.duration.is_some());
+        assert!(snapshot.position > Duration::ZERO);
     }
 }

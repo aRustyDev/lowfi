@@ -10,6 +10,8 @@ pub mod config;
 pub mod downloader;
 pub mod error;
 mod history;
+#[cfg(all(feature = "menubar", target_os = "macos"))]
+mod menubar;
 pub mod message;
 pub mod player;
 #[cfg(feature = "scrape")]
@@ -133,7 +135,18 @@ fn main() -> eyre::Result<()> {
     let config_path = data_dir()?.join("config.toml");
     let overrides = config::CliOverrides::from_args(&args, &Args::command().get_matches());
     let (settings, bindings) = config::load(&config_path, overrides)?;
-    let terminal = terminal_enabled(env("LOWFI_DISABLE_UI"))?;
+    let terminal = settings.interfaces.mode.terminal() && !env("LOWFI_DISABLE_UI");
+
+    #[cfg(all(feature = "menubar", target_os = "macos"))]
+    if settings.interfaces.mode.menubar() {
+        return menubar::run(settings, bindings, terminal).map_err(Into::into);
+    }
+    if settings.interfaces.mode.menubar() {
+        return Err(Error::MenubarUnavailable.into());
+    }
+    if !terminal {
+        terminal_enabled(true)?;
+    }
 
     runtime()?.block_on(run(settings, bindings, terminal))?;
     Ok(())

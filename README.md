@@ -341,3 +341,25 @@ later Previous restarts the current track; earlier it selects a retained previou
 track. Next traverses retained forward tracks before downloading again. During
 loading, Previous returns to the retained current track. The terminal layout and
 displayed control bar stay unchanged. Windows SMTC Previous remains unavailable.
+
+### macOS menu bar
+
+On macOS, build or run Lowfi with its optional native menu-bar interface:
+
+```sh
+cargo run --features menubar
+# or
+cargo build --release --features menubar
+./target/release/lowfi
+```
+
+The feature keeps the existing `lowfi` command and playback session. It adds a
+menu-bar icon with current-track status, Play/Pause, Next, and Quit. Menu-only
+operation stays in the foreground; it does not detach the process or create a
+launchd service.
+
+Set `[interfaces].mode` in `config.toml`, or use
+`LOWFI_INTERFACES__MODE` (`terminal`, `terminal-and-menubar`, or `menubar`). A
+feature-enabled macOS build defaults to `terminal-and-menubar`; all other builds
+default to `terminal`. `menubar` suppresses terminal setup and input, while
+`LOWFI_DISABLE_UI=1` also suppresses terminal setup when a menu is active.

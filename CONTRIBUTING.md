@@ -85,3 +85,6 @@ History mutation coverage also includes the bounded model and player transitions
 The combined dispatcher tests use the neutral in-memory player fixture on every
 platform; waiter tests render audio without a device. MPRIS adapter tests need
 no session bus. Application and native event loops remain outside mutation scopes.
+
+On macOS also run `cargo nextest run --locked --features menubar,scrape,extra-audio-formats`.
+Icon tests rasterize the embedded SVG without starting AppKit or an audio device.
