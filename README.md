@@ -331,3 +331,25 @@ file:///home/user/Other Music/second-file.mp3
 Further examples can be found in the [data](https://github.com/talwat/lowfi/tree/main/data) folder.
 
 Playback and frontend responsibilities are described in [the architecture notes](docs/ARCHITECTURE.md).
+
+### macOS menu bar
+
+On macOS, build or run Lowfi with its optional native menu-bar interface:
+
+```sh
+cargo run --features menubar
+# or
+cargo build --release --features menubar
+./target/release/lowfi
+```
+
+The feature keeps the existing `lowfi` command and playback session. It adds a
+menu-bar icon with current-track status, Play/Pause, Next, and Quit. Menu-only
+operation stays in the foreground; it does not detach the process or create a
+launchd service.
+
+Set `[interfaces].mode` in `config.toml`, or use
+`LOWFI_INTERFACES__MODE` (`terminal`, `terminal-and-menubar`, or `menubar`). A
+feature-enabled macOS build defaults to `terminal-and-menubar`; all other builds
+default to `terminal`. `menubar` suppresses terminal setup and input, while
+`LOWFI_DISABLE_UI=1` also suppresses terminal setup when a menu is active.
