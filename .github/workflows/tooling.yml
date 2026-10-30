@@ -77,9 +77,9 @@ jobs:
       - name: Run no-default-features tests with nextest
         run: cargo nextest run --locked --no-default-features
       - name: Run maximal macOS feature tests with nextest
-        run: cargo nextest run --locked --features scrape,extra-audio-formats
+        run: cargo nextest run --locked --features macos-app,scrape,extra-audio-formats
       - name: Run maximal macOS no-default-features tests with nextest
-        run: cargo nextest run --locked --no-default-features --features scrape,extra-audio-formats
+        run: cargo nextest run --locked --no-default-features --features macos-app,scrape,extra-audio-formats
       - name: Check curated macOS feature combinations
         run: cargo fc check --locked --all-targets
 

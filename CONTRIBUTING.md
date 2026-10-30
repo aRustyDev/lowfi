@@ -91,3 +91,6 @@ Inspect `mutants.out/missed.txt`, `timeout.txt`, `unviable.txt`, and
 `outcomes.json`; timeouts and execution errors require investigation. Use
 `cargo mutants --test-tool cargo` only when nextest is unavailable, and never
 retry a failed nextest run automatically with another runner.
+
+On macOS run `packaging/macos/build-app.sh` to build and verify the optional
+terminal application bundle. The launcher remains outside mutation scopes.
