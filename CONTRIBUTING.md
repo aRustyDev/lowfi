@@ -80,3 +80,8 @@ retry a failed nextest run automatically with another runner.
 
 The core mutation scope also covers `src/player.rs`; `Player::close` is excluded
 because it persists user files. Core tests render fixture audio in memory.
+
+History mutation coverage also includes the bounded model and player transitions.
+The combined dispatcher tests use the neutral in-memory player fixture on every
+platform; waiter tests render audio without a device. MPRIS adapter tests need
+no session bus. Application and native event loops remain outside mutation scopes.

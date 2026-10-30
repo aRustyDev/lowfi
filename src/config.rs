@@ -62,6 +62,7 @@ pub struct Ui {
 pub struct Bindings {
     pub play_pause: Vec<String>,
     pub next: Vec<String>,
+    pub previous: Vec<String>,
     pub quit: Vec<String>,
     pub bookmark: Vec<String>,
     pub volume_up: Vec<String>,
@@ -91,6 +92,7 @@ impl Default for Settings {
             bindings: Bindings {
                 play_pause: vec!["p".into(), "Space".into()],
                 next: vec!["s".into(), "n".into(), "l".into()],
+                previous: vec!["h".into()],
                 quit: vec!["q".into()],
                 bookmark: vec!["b".into()],
                 volume_up: vec!["+".into(), "=".into(), "k".into(), "Up".into()],
@@ -277,6 +279,7 @@ impl BindingMap {
         let groups = [
             ("play_pause", &bindings.play_pause, Message::PlayPause),
             ("next", &bindings.next, Message::Next),
+            ("previous", &bindings.previous, Message::Previous),
             ("quit", &bindings.quit, Message::Quit),
             ("bookmark", &bindings.bookmark, Message::Bookmark),
             ("volume_up", &bindings.volume_up, Message::ChangeVolume(0.1)),
@@ -339,6 +342,7 @@ fn action_for(message: Message) -> &'static str {
     match message {
         Message::PlayPause => "play_pause",
         Message::Next => "next",
+        Message::Previous => "previous",
         Message::Quit => "quit",
         Message::Bookmark => "bookmark",
         Message::ChangeVolume(change) if change > 0.09 => "volume_up",
@@ -571,6 +575,7 @@ mod tests {
         for (message, expected) in [
             (Message::PlayPause, "play_pause"),
             (Message::Next, "next"),
+            (Message::Previous, "previous"),
             (Message::Quit, "quit"),
             (Message::Bookmark, "bookmark"),
             (Message::ChangeVolume(0.1), "volume_up"),
@@ -613,6 +618,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn previous_binding_has_a_default_and_can_be_reassigned() {
+        Jail::expect_with(|jail| {
+            let (_, keys) = load(Path::new("missing.toml"), CliOverrides::default()).unwrap();
+            assert_eq!(keys.message(&KeyCode::Char('h')), Some(Message::Previous));
+            jail.create_file("custom.toml", "[bindings]\nprevious = [\"x\"]\n")?;
+            let (_, keys) = load(Path::new("custom.toml"), CliOverrides::default()).unwrap();
+            assert_eq!(keys.message(&KeyCode::Char('x')), Some(Message::Previous));
+            assert_eq!(keys.message(&KeyCode::Char('h')), None);
+            jail.create_file("duplicate.toml", "[bindings]\nprevious = [\"q\"]\n")?;
+            assert!(load(Path::new("duplicate.toml"), CliOverrides::default()).is_err());
+            Ok(())
+        });
+    }
     #[test]
     fn legacy_environment_switches_do_not_enter_structured_settings() {
         Jail::expect_with(|jail| {

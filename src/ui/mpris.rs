@@ -3,14 +3,17 @@
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     process,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use arc_swap::ArcSwap;
 use mpris_server::{
     zbus::{self, fdo, Result},
     LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property, RootInterface,
-    Time, TrackId, Volume,
+    Signal, Time, TrackId, Volume,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -55,6 +58,7 @@ pub struct Player {
     current: ArcSwap<Current>,
     list: String,
     sender: Sender,
+    can_go_previous: Arc<AtomicBool>,
 }
 
 impl RootInterface for Player {
@@ -113,7 +117,10 @@ impl PlayerInterface for Player {
     }
 
     async fn previous(&self) -> fdo::Result<()> {
-        Err(ERROR)
+        if self.can_go_previous.load(Ordering::Relaxed) {
+            self.sender.send(Message::Previous).await?;
+        }
+        Ok(())
     }
 
     async fn pause(&self) -> fdo::Result<()> {
@@ -236,7 +243,7 @@ impl PlayerInterface for Player {
     }
 
     async fn can_go_previous(&self) -> fdo::Result<bool> {
-        Ok(false)
+        Ok(self.can_go_previous.load(Ordering::Relaxed))
     }
 
     async fn can_play(&self) -> fdo::Result<bool> {
@@ -269,19 +276,47 @@ pub struct Server {
 impl Server {
     /// Handles a player message to update the state of the MPRIS player.
     pub async fn handle(&mut self, message: &crate::Message) -> ui::Result<()> {
+        let mut restarted = false;
+        let mut capability_changed = false;
         while let Ok(update) = self.receiver.try_recv() {
-            if let Update::Track(current) = update {
-                self.player().current.swap(Arc::new(current));
+            match update {
+                Update::Track(current) => {
+                    self.player().current.swap(Arc::new(current));
+                }
+                Update::CanGoPrevious(can_go_previous) => {
+                    self.player()
+                        .can_go_previous
+                        .store(can_go_previous, Ordering::Relaxed);
+                    capability_changed = true;
+                }
+                Update::Restarted => restarted = true,
+                _ => (),
             }
         }
 
-        match message {
+        let result = match message {
             Message::SetRate(_) => self.update_rate().await,
             Message::ChangeVolume(_) | Message::SetVolume(_) => self.update_volume().await,
             Message::Play | Message::Pause | Message::PlayPause => self.update_playback().await,
-            Message::Init | Message::Loaded | Message::Next => self.update_metadata().await,
+            Message::Init
+            | Message::Loaded
+            | Message::Next
+            | Message::Previous
+            | Message::Finished(_) => self.update_metadata().await,
             _ => Ok(()),
+        };
+        result?;
+        if capability_changed {
+            self.update_previous_capability().await?;
         }
+        if restarted {
+            self.inner
+                .emit(Signal::Seeked {
+                    position: Time::from_micros(0),
+                })
+                .await?;
+        }
+        Ok(())
     }
 
     /// Shorthand to emit a `PropertiesChanged` signal, like when pausing/unpausing.
@@ -316,6 +351,13 @@ impl Server {
             .await
     }
 
+    async fn update_previous_capability(&mut self) -> ui::Result<()> {
+        self.changed(vec![Property::CanGoPrevious(
+            self.player().can_go_previous.load(Ordering::Relaxed),
+        )])
+        .await
+    }
+
     /// Updates the current track data with the current information.
     async fn update_metadata(&mut self) -> ui::Result<()> {
         let metadata = self.player().metadata().await?;
@@ -323,6 +365,7 @@ impl Server {
         self.changed(vec![
             Property::Metadata(metadata),
             Property::PlaybackStatus(status),
+            Property::CanGoPrevious(self.player().can_go_previous.load(Ordering::Relaxed)),
         ])
         .await?;
 
@@ -360,6 +403,7 @@ impl Server {
                 playback: state.playback,
                 current: ArcSwap::new(Arc::new(state.current)),
                 list: tracklist,
+                can_go_previous: Arc::new(AtomicBool::new(false)),
             },
         )
         .await?;
@@ -383,7 +427,7 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     fn player(
-        _can_go_previous: bool,
+        can_go_previous: bool,
     ) -> (
         Player,
         mpsc::Receiver<Message>,
@@ -399,11 +443,25 @@ mod tests {
                 current: ArcSwap::new(Arc::new(Current::default())),
                 list: String::from("test"),
                 sender: Sender::new(sender),
+                can_go_previous: Arc::new(AtomicBool::new(can_go_previous)),
             },
             receiver,
             sink,
             output,
         )
+    }
+
+    #[tokio::test]
+    async fn previous_capability_and_dispatch_follow_history_state() {
+        let (player, mut receiver, _, _) = player(false);
+        assert!(!player.can_go_previous().await.unwrap());
+        player.previous().await.unwrap();
+        assert!(receiver.try_recv().is_err());
+
+        player.can_go_previous.store(true, Ordering::Relaxed);
+        assert!(player.can_go_previous().await.unwrap());
+        player.previous().await.unwrap();
+        assert_eq!(receiver.try_recv(), Ok(Message::Previous));
     }
 
     #[tokio::test]
@@ -483,7 +541,7 @@ mod tests {
         assert_eq!(player.minimum_rate().await.unwrap(), 0.2);
         assert_eq!(player.maximum_rate().await.unwrap(), 3.0);
         assert!(player.can_go_next().await.unwrap());
-        assert!(!player.can_go_previous().await.unwrap());
+        assert!(player.can_go_previous().await.unwrap());
         assert!(player.can_play().await.unwrap());
         assert!(player.can_pause().await.unwrap());
         assert!(!player.can_seek().await.unwrap());

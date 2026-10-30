@@ -331,3 +331,13 @@ file:///home/user/Other Music/second-file.mp3
 Further examples can be found in the [data](https://github.com/talwat/lowfi/tree/main/data) folder.
 
 Playback and frontend responsibilities are described in [the architecture notes](docs/ARCHITECTURE.md).
+
+### Playback history
+
+Lowfi retains the current track and ten previous tracks as compressed audio for
+the current session. Press `h` (configurable as `bindings.previous`), use a
+terminal Previous media key, or use Linux MPRIS Previous. At three seconds or
+later Previous restarts the current track; earlier it selects a retained previous
+track. Next traverses retained forward tracks before downloading again. During
+loading, Previous returns to the retained current track. The terminal layout and
+displayed control bar stay unchanged. Windows SMTC Previous remains unavailable.

@@ -41,6 +41,7 @@ fn message_for(code: KeyCode, modifiers: KeyModifiers, bindings: &BindingMap) ->
             | event::MediaKeyCode::PlayPause => Some(Message::PlayPause),
             event::MediaKeyCode::Stop => Some(Message::Pause),
             event::MediaKeyCode::TrackNext => Some(Message::Next),
+            event::MediaKeyCode::TrackPrevious => Some(Message::Previous),
             event::MediaKeyCode::LowerVolume => Some(Message::ChangeVolume(-0.1)),
             event::MediaKeyCode::RaiseVolume => Some(Message::ChangeVolume(0.1)),
             event::MediaKeyCode::MuteVolume => Some(Message::ChangeVolume(-1.0)),
@@ -158,7 +159,7 @@ mod tests {
                     KeyModifiers::NONE,
                     &bindings,
                 ),
-                None
+                Some(Message::Previous)
             );
             assert_eq!(
                 message_for(KeyCode::F(1), KeyModifiers::NONE, &bindings),
