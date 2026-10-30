@@ -93,17 +93,18 @@ impl Player {
     /// volume state. The function returns a fully constructed `Player` ready
     /// to be driven via `run`.
     pub async fn init(
-        args: crate::Args,
+        settings: crate::config::Settings,
+        bindings: crate::config::BindingMap,
         mixer: &rodio::mixer::Mixer,
     ) -> crate::Result<(Self, crate::Tasks)> {
         let (tx, rx) = mpsc::channel(8);
         let mut tasks = Tasks::new(tx.clone());
-        if args.paused {
+        if settings.playback.paused {
             tx.send(Message::Pause).await?;
         }
 
         tx.send(Message::Init).await?;
-        let list = List::load(args.track_list.as_ref()).await?;
+        let list = List::load(settings.playback.track_list.as_ref()).await?;
 
         let sink = Arc::new(rodio::Player::connect_new(mixer));
         let state = ui::State::initial(Arc::clone(&sink), list.name.clone());
@@ -111,9 +112,9 @@ impl Player {
         let volume = PersistentVolume::load().await?;
         sink.set_volume(volume.float());
 
-        let ui = tasks.ui(state, &args).await?;
+        let ui = tasks.ui(state, &settings, bindings).await?;
         let player = Self {
-            downloader: tasks.downloader(&args, ui.logger(), list)?,
+            downloader: tasks.downloader(&settings, ui.logger(), list)?,
             ui,
             waiter: tasks.waiter(Arc::clone(&sink)),
             bookmarks: Bookmarks::load().await?,

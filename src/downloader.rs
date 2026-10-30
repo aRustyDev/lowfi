@@ -187,7 +187,7 @@ impl crate::Tasks {
     /// `tx` specifies the [`Sender`] to be notified with [`crate::Message::Loaded`].
     pub fn downloader(
         &mut self,
-        args: &crate::Args,
+        settings: &crate::config::Settings,
         logger: Logger,
         tracks: tracks::List,
     ) -> crate::Result<Handle> {
@@ -197,12 +197,12 @@ impl crate::Tasks {
                 "/",
                 env!("CARGO_PKG_VERSION")
             ))
-            .timeout(Duration::from_secs(args.timeout))
+            .timeout(Duration::from_secs(settings.playback.timeout))
             .build()?;
 
-        let (qtx, qrx) = mpsc::channel(args.buffer_size as usize - 1);
+        let (qtx, qrx) = mpsc::channel(settings.playback.buffer_size as usize - 1);
         let downloader = Downloader {
-            debug: args.debug,
+            debug: settings.playback.debug,
             logger,
             queue: qtx,
             tx: self.tx(),

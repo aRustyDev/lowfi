@@ -6,7 +6,12 @@ use tokio::sync::broadcast;
 impl crate::Tasks {
     /// Initializes the UI itself, along with all of the tasks that are related to it.
     #[allow(clippy::unused_async)]
-    pub async fn ui(&mut self, state: ui::State, args: &crate::Args) -> crate::Result<ui::Handle> {
+    pub async fn ui(
+        &mut self,
+        state: ui::State,
+        settings: &crate::config::Settings,
+        bindings: crate::config::BindingMap,
+    ) -> crate::Result<ui::Handle> {
         let (utx, urx) = broadcast::channel(8);
 
         #[cfg(feature = "mpris")]
@@ -16,13 +21,13 @@ impl crate::Tasks {
         let media_controls =
             ui::media_controls::Server::try_new(state.clone(), self.tx(), urx.resubscribe());
 
-        let params = interface::Params::try_from(args)?;
+        let params = interface::Params::try_from(settings)?;
         let interface = interface::Interface::new(params)?;
         let logger = interface.logger.clone();
 
         if params.enabled {
             self.spawn(ui::run(urx, interface, state));
-            self.spawn(input::listen(self.tx()));
+            self.spawn(input::listen(self.tx(), bindings));
         }
 
         Ok(ui::Handle {
