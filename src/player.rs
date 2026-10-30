@@ -30,7 +30,10 @@ impl Current {
     }
 }
 
-/// Read-only access to live playback data for frontends.
+/// Live, read-only audio state shared by frontends.
+///
+/// Cloning this view shares the player; it does not snapshot its values. Send
+/// mutations through [`Message`] so the core can notify every frontend.
 #[derive(Clone)]
 pub(crate) struct PlaybackView(Arc<rodio::Player>);
 
@@ -54,7 +57,10 @@ impl PlaybackView {
     }
 }
 
-/// Shared state frontends receive at initialization.
+/// Initial frontend state: copied track metadata and a live playback view.
+///
+/// Apply [`Update`]s to keep `current` and `bookmarked` in sync. Cloning this
+/// state shares the playback view but does not subscribe to future updates.
 #[derive(Clone)]
 pub(crate) struct State {
     pub(crate) playback: PlaybackView,
@@ -75,7 +81,10 @@ impl State {
     }
 }
 
-/// State changes published by the playback core.
+/// Ordered changes published by the playback core.
+///
+/// Decoded-track updates precede their bookmark status. Volume, playback and rate events
+/// tell observers to reread the corresponding live [`PlaybackView`] value.
 #[derive(Debug, Clone)]
 pub(crate) enum Update {
     Track(Current),
@@ -86,11 +95,14 @@ pub(crate) enum Update {
     Quit,
 }
 
-/// The result of handling a command.
+/// Tells the application whether to forward a handled command to native adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandOutcome {
+    /// The command was handled; adapters may now observe its published updates.
     Applied,
+    /// The command was not applicable; skip adapter notifications.
     Ignored,
+    /// End dispatch; the caller still needs to close the player.
     Quit,
 }
 
@@ -177,7 +189,8 @@ impl Player {
         Ok(())
     }
 
-    /// Applies one command and publishes its observable state updates.
+    /// Handles a command, publishing any updates before returning its dispatch outcome.
+    /// A handled command may leave values unchanged, such as Play while playing.
     pub(crate) fn handle(&mut self, message: Message) -> crate::Result<CommandOutcome> {
         match message {
             Message::Next if self.current.loading() => return Ok(CommandOutcome::Ignored),
