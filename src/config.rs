@@ -1,4 +1,7 @@
 //! Loading and validating Lowfi's user configuration.
+//!
+//! Resolve settings through `load` before starting playback or terminal tasks.
+//! The user-facing option reference is in `docs/CONFIGURATION.md`.
 
 use std::{
     collections::HashMap,
@@ -14,7 +17,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::Message;
 
-/// Fully resolved application settings.
+/// Application settings after deserialization.
+///
+/// Use [`load`] to apply validation and compile key bindings. Deserializing this
+/// type alone does not enforce cross-field or binding constraints.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -28,6 +34,7 @@ pub struct Settings {
 pub struct Playback {
     pub paused: bool,
     pub track_list: String,
+    /// Song-buffer setting, including the current track; must be at least two.
     pub buffer_size: u32,
     pub timeout: u64,
     pub debug: bool,
@@ -41,9 +48,15 @@ pub struct Ui {
     pub borderless: bool,
     pub clock: bool,
     pub fps: u8,
+    /// Sizing parameter, not terminal columns; the renderer caps it at 32.
     pub width: usize,
 }
 
+/// Configurable terminal keys, grouped by action.
+///
+/// Each supplied list replaces that action's defaults; an empty list removes its
+/// configurable keys. Media keys and reserved Ctrl+C handling live in the input
+/// layer and are not disabled by an empty list.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bindings {
@@ -129,6 +142,10 @@ struct UiOverrides {
 }
 
 impl CliOverrides {
+    /// Keeps only values explicitly supplied on the command line.
+    ///
+    /// `args` and `matches` must describe the same parse. Clap's default values
+    /// must stay absent here so they cannot overwrite file or environment values.
     pub fn from_args(args: &crate::Args, matches: &clap::ArgMatches) -> Self {
         use clap::parser::ValueSource;
         let supplied = |name| matches.value_source(name) == Some(ValueSource::CommandLine);
@@ -167,11 +184,13 @@ impl CliOverrides {
     }
 }
 
-/// Maps terminal keys to their configured messages.
+/// Validated lookup of normalized terminal keys to their configured messages.
 #[derive(Clone, Debug)]
 pub struct BindingMap(HashMap<KeyCode, Message>);
 
 impl BindingMap {
+    /// Looks up an already-normalized key; ASCII character keys must be lowercase.
+    /// The input layer normalizes events and handles reserved/media keys separately.
     pub fn message(&self, key: &KeyCode) -> Option<Message> {
         self.0.get(key).copied()
     }
@@ -195,7 +214,16 @@ pub enum Error {
     },
 }
 
-/// Loads settings from defaults, an optional exact TOML file, environment, and CLI overrides.
+/// Resolves and validates settings, returning the compiled terminal bindings.
+///
+/// Later sources win: defaults, the exact TOML path, `LOWFI_*` environment, then
+/// explicit CLI values. Binding lists replace earlier lists rather than append.
+/// A missing file is allowed; this function never creates or overwrites it.
+///
+/// # Errors
+/// Returns errors for unreadable or malformed configuration, unknown fields,
+/// invalid values, or invalid/duplicate bindings. Diagnostics identify the field
+/// and source where available. Legacy UI/MPRIS switches are handled separately.
 pub fn load(path: &Path, cli: CliOverrides) -> Result<(Settings, BindingMap), Error> {
     let exists = path.try_exists().map_err(|source| Error::Read {
         path: path.into(),
@@ -215,6 +243,8 @@ pub fn load(path: &Path, cli: CliOverrides) -> Result<(Settings, BindingMap), Er
     let figment = figment
         .merge(
             Env::prefixed("LOWFI_")
+                // These process switches predate structured configuration. Feeding
+                // them into Settings would make deny_unknown_fields reject them.
                 .ignore(&["disable_ui", "fixed_mpris_name"])
                 .split("__"),
         )
