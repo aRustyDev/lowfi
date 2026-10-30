@@ -130,15 +130,74 @@ pub(crate) fn run(
         .map_err(|_| crate::Error::MenubarUnavailable)?
 }
 
+const ICON_PIXELS: u32 = 36;
+const ICON_SVG: &[u8] = include_bytes!("../docs/media/menubar.svg");
+
 fn icon() -> Icon {
-    let mut pixels = vec![0; 16 * 16 * 4];
-    for y in 2usize..14 {
-        for x in 2usize..14 {
-            if (x as i32 - 8).pow(2) + (y as i32 - 8).pow(2) <= 36 {
-                let start = (y * 16 + x) * 4;
-                pixels[start..start + 4].copy_from_slice(&[0, 0, 0, 255]);
-            }
+    let pixels = rasterize_icon(ICON_PIXELS)
+        .expect("the bundled Lowfi menu-bar SVG must parse and rasterize");
+    Icon::from_rgba(pixels, ICON_PIXELS, ICON_PIXELS)
+        .expect("the bundled Lowfi menu-bar icon raster must be valid")
+}
+
+fn rasterize_icon(size: u32) -> Result<Vec<u8>, String> {
+    let tree = resvg::usvg::Tree::from_data(ICON_SVG, &resvg::usvg::Options::default())
+        .map_err(|error| error.to_string())?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size)
+        .ok_or_else(|| format!("unable to allocate a {size} by {size} icon buffer"))?;
+    let scale = size as f32 / 24.0;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    Ok(pixmap.take())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_icon_rasterizes_at_menu_bar_sizes() {
+        for size in [16, 18, 22, 32, 36, 44] {
+            let pixels = rasterize_icon(size).expect("bundled SVG is valid");
+            assert_eq!(pixels.len(), (size * size * 4) as usize);
+
+            let alphas = pixels.chunks_exact(4).map(|pixel| pixel[3]);
+            assert!(alphas.clone().any(|alpha| alpha > 0), "{size}px has ink");
+            assert!(
+                alphas.clone().any(|alpha| alpha < u8::MAX),
+                "{size}px keeps transparent padding"
+            );
+            assert!(
+                pixels
+                    .chunks_exact(4)
+                    .filter(|pixel| pixel[3] > 0)
+                    .all(|pixel| pixel[..3] == [0, 0, 0]),
+                "{size}px is monochrome black"
+            );
+            let size = size as usize;
+            let alpha_at = |x: usize, y: usize| pixels[(y * size + x) * 4 + 3];
+            assert!(
+                (0..size).all(|x| alpha_at(x, 0) == 0 && alpha_at(x, size - 1) == 0),
+                "{size}px has vertical padding"
+            );
+            assert!(
+                (0..size).all(|y| alpha_at(0, y) == 0 && alpha_at(size - 1, y) == 0),
+                "{size}px has horizontal padding"
+            );
+            assert!(
+                pixels
+                    .chunks_exact(4)
+                    .any(|pixel| (1..u8::MAX).contains(&pixel[3])),
+                "{size}px has antialiased edges"
+            );
         }
     }
-    Icon::from_rgba(pixels, 16, 16).expect("valid embedded icon")
+
+    #[test]
+    fn tray_icon_constructs_from_the_retina_raster() {
+        let _icon = icon();
+    }
 }
