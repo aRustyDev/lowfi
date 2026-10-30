@@ -13,10 +13,13 @@ use crate::{
     Message, Tasks,
 };
 
+/// Owns one playback session, its tasks, and the command path shared by frontends.
 pub(crate) struct Application {
     player: Player,
     tasks: Tasks,
     commands: mpsc::Receiver<Message>,
+    /// Keeps a subscriber alive for the application lifetime. Publishing fails
+    /// if every receiver is dropped, even when no frontend consumes updates.
     #[allow(dead_code)]
     updates: broadcast::Receiver<Update>,
     #[cfg(feature = "mpris")]
@@ -82,6 +85,9 @@ impl Application {
         })
     }
 
+    /// Dispatches commands until quit, channel closure, task completion, or an error.
+    /// Native adapters observe applied commands after the core publishes updates.
+    /// The caller remains responsible for terminal cleanup and [`Self::close`].
     pub(crate) async fn run(&mut self) -> crate::Result<()> {
         loop {
             tokio::select! {
