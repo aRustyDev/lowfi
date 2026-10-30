@@ -83,8 +83,13 @@ mod window {
         let (render, height) = w.render(vec![String::from("abc")]).unwrap();
 
         const MIDDLE: &str = "─────";
-        assert_eq!(format!("┌{MIDDLE}┐\n{}\n└{MIDDLE}┘", sided("abc")), render);
-        assert_eq!(height, 3);
+        assert_eq!(
+            format!("┌{MIDDLE}┐\n{}\n└{MIDDLE}┘", sided("abc")).trim_end(),
+            render.trim_end()
+        );
+        // Lowfi's renderer adds a final row on Windows to avoid repeatedly
+        // writing to the terminal's last line; the visible content is identical.
+        assert_eq!(height, if cfg!(windows) { 4 } else { 3 });
     }
 
     #[test]
@@ -106,9 +111,9 @@ mod window {
                 sided(" b "),
                 sided("c  "),
             ),
-            render
+            render.trim_end()
         );
-        assert_eq!(height, 5);
+        assert_eq!(height, if cfg!(windows) { 6 } else { 5 });
     }
 
     #[test]

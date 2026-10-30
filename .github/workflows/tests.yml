@@ -1,27 +1,42 @@
-name: Rust Unit Tests
+name: Tests
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - '**'
-
+    branches: ['**']
   pull_request:
-    branches:
-      - '**'
+    branches: ['**']
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  native:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Test platform adapters on their native OS; an all-features build
+        # cannot exercise both the Linux and Windows integrations.
+        include:
+          - os: ubuntu-latest
+            features: mpris,scrape,extra-audio-formats
+          - os: windows-latest
+            features: media-controls,scrape,extra-audio-formats
+          - os: macos-latest
+            features: scrape,extra-audio-formats
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Install dependencies
-        run: sudo apt install libasound2-dev
-
-      - name: Setup rust
+      - uses: actions/checkout@v5
+      - name: Install ALSA development headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Run tests
-        run: cargo test --all --verbose
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run standard tests
+        run: cargo test --locked
+      - name: Run tests without default features
+        run: cargo test --locked --no-default-features
+      - name: Run native feature tests
+        run: cargo test --locked --features ${{ matrix.features }}
+      - name: Check native features without default features
+        run: cargo check --locked --all-targets --no-default-features --features ${{ matrix.features }}
