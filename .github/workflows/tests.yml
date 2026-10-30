@@ -14,6 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Test platform adapters on their native OS; an all-features build
+        # cannot exercise both the Linux and Windows integrations.
         include:
           - os: ubuntu-latest
             features: mpris,scrape,extra-audio-formats

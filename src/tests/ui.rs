@@ -87,8 +87,8 @@ mod window {
             format!("┌{MIDDLE}┐\n{}\n└{MIDDLE}┘", sided("abc")).trim_end(),
             render.trim_end()
         );
-        // Crossterm's Windows backend includes the final terminal row while
-        // its Unix backend does not; both renderings contain three lines.
+        // Lowfi's renderer adds a final row on Windows to avoid repeatedly
+        // writing to the terminal's last line; the visible content is identical.
         assert_eq!(height, if cfg!(windows) { 4 } else { 3 });
     }
 
