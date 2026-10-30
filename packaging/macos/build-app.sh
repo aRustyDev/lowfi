@@ -37,6 +37,7 @@ cp "$script_dir/Lowfi.icns" "$stage_dir/Lowfi.app/Contents/Resources/Lowfi.icns"
 sed "s/@VERSION@/$package_version/g" "$script_dir/Info.plist.in" > "$stage_dir/Lowfi.app/Contents/Info.plist"
 chmod 755 "$stage_dir/Lowfi.app/Contents/MacOS/lowfi" "$stage_dir/Lowfi.app/Contents/MacOS/lowfi-app-launcher" "$stage_dir/Lowfi.app/Contents/Resources/Lowfi.command"
 
+# Verify the staging copy before replacing the existing bundle output.
 "$script_dir/verify-app.sh" "$stage_dir/Lowfi.app" "$package_version"
 mkdir -p "$(dirname "$bundle_dir")"
 rm -rf "$bundle_dir"
