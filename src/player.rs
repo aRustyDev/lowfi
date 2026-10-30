@@ -188,6 +188,7 @@ impl Player {
         }
         match self.downloader.track() {
             downloader::Output::Loading(progress) => {
+                self.generation = self.generation.wrapping_add(1);
                 self.sink.stop();
                 self.set_current(Current::Loading(progress))?;
                 self.update_previous_capability()?;
@@ -504,5 +505,25 @@ mod tests {
         assert_eq!(player.apply(Message::Finished(1)).unwrap(), false);
         assert_eq!(player.apply(Message::PreviousAvailable(1)).unwrap(), false);
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn loading_invalidates_completion_and_previous_restores_retained_audio() {
+        let (mut player, mut updates, mut output) = player_with_tracks([fixture::queued("one")]);
+        player.apply(Message::Init).unwrap();
+        render(&mut output, 1_024);
+        let generation = player.generation;
+        handle_while_rendering(&mut player, &mut output, Message::Next);
+        assert!(player.current.loading());
+        assert_ne!(player.generation, generation);
+        while updates.try_recv().is_ok() {}
+        assert!(!player.apply(Message::Finished(generation)).unwrap());
+        assert!(!player
+            .apply(Message::PreviousAvailable(generation))
+            .unwrap());
+        assert!(updates.try_recv().is_err());
+        handle_while_rendering(&mut player, &mut output, Message::Previous);
+        assert_eq!(current_name(&player), "one");
+        assert!(!player.apply(Message::Loaded).unwrap());
     }
 }

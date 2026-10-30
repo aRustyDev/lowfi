@@ -329,10 +329,8 @@ impl Server {
 
     /// Updates the volume with the latest information.
     async fn update_volume(&mut self) -> ui::Result<()> {
-        self.changed(vec![Property::Volume(
-            self.player().playback.volume().into(),
-        )])
-        .await?;
+        self.changed(vec![Property::Volume(self.player().sink.volume().into())])
+            .await?;
 
         Ok(())
     }
@@ -385,7 +383,7 @@ impl Server {
 
         // Filtered track list, since MPRIS objects don't like non-alphanumeric characters.
         let tracklist: String = state
-            .track_list
+            .tracklist
             .chars()
             .filter(|c| c.is_ascii_lowercase())
             .collect();
