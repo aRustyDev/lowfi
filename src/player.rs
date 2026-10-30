@@ -1,5 +1,6 @@
 //! The player, which contains all of the core logic behind the music player.
 
+use crate::history::History;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, Receiver};
 
@@ -48,6 +49,8 @@ impl Current {
 pub struct Player {
     /// Persistent bookmark storage used by the player.
     bookmarks: Bookmarks,
+    history: History,
+    generation: u64,
 
     /// Current playback state (loading or track).
     current: Current,
@@ -119,6 +122,8 @@ impl Player {
             waiter: tasks.waiter(Arc::clone(&sink)),
             bookmarks: Bookmarks::load().await?,
             current: Current::default(),
+            history: History::default(),
+            generation: 0,
             rx,
             sink,
         };
@@ -128,6 +133,7 @@ impl Player {
 
     /// Close any outlying processes, as well as persist state that
     /// should survive such as bookmarks and volume.
+    #[cfg_attr(test, mutants::skip)]
     pub async fn close(self) -> crate::Result<()> {
         self.sink.stop();
         self.bookmarks.save().await?;
@@ -136,79 +142,367 @@ impl Player {
         Ok(())
     }
 
-    /// Play a queued track by decoding, appending to the sink and notifying
-    /// other subsystems that playback has changed.
-    pub fn play(&mut self, queued: tracks::Queued) -> crate::Result<()> {
-        let decoded = queued.decode()?;
-        self.sink.append(decoded.data);
-        self.set_current(Current::Track(decoded.info))?;
-        self.waiter.notify();
+    fn can_go_previous(&self) -> bool {
+        self.history.has_previous()
+            || matches!(self.current, Current::Track(_))
+                && History::should_restart(self.sink.get_pos())
+            || self.current.loading() && self.history.current().is_some()
+    }
 
+    fn update_previous_capability(&mut self) -> crate::Result<()> {
+        self.ui
+            .update(ui::Update::CanGoPrevious(self.can_go_previous()))
+    }
+
+    fn play(&mut self, queued: tracks::Queued) -> crate::Result<()> {
+        let decoded = queued.decode()?;
+        let paused = self.sink.is_paused();
+        // Rodio drains a stopped source through the mixer. Resume long enough for that
+        // drain when changing tracks from a paused state, then restore the user's pause.
+        if paused {
+            self.sink.play();
+        }
+        self.sink.stop();
+        self.sink.append(decoded.data);
+        if paused {
+            self.sink.pause();
+        }
+        self.set_current(Current::Track(decoded.info))?;
+        self.generation = self.generation.wrapping_add(1);
+        self.waiter.notify(self.generation);
+        self.update_previous_capability()?;
         Ok(())
     }
 
-    /// Drives the main message loop of the player.
-    ///
-    /// This will return when a `Message::Quit` is received. It handles commands
-    /// coming from the frontend and updates playback/UI state accordingly.
-    pub async fn run(&mut self) -> crate::Result<()> {
-        while let Some(message) = self.rx.recv().await {
-            match message {
-                Message::Next | Message::Init | Message::Loaded => {
-                    if message == Message::Next && self.current.loading() {
-                        continue;
-                    }
+    fn play_current_history(&mut self) -> crate::Result<bool> {
+        let Some(track) = self.history.current().cloned() else {
+            return Ok(false);
+        };
+        self.play(track)?;
+        Ok(true)
+    }
 
-                    self.sink.stop();
-                    match self.downloader.track() {
-                        downloader::Output::Loading(progress) => {
-                            self.set_current(Current::Loading(progress))?;
-                        }
-                        downloader::Output::Queued(queued) => self.play(queued)?,
-                    }
-                }
-                Message::Play => {
+    fn advance(&mut self) -> crate::Result<()> {
+        if let Some(track) = self.history.next().cloned() {
+            return self.play(track);
+        }
+        match self.downloader.track() {
+            downloader::Output::Loading(progress) => {
+                self.sink.stop();
+                self.set_current(Current::Loading(progress))?;
+                self.update_previous_capability()?;
+            }
+            downloader::Output::Queued(queued) => {
+                self.history.push(queued);
+                self.play_current_history()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn previous(&mut self) -> crate::Result<()> {
+        if self.current.loading() {
+            let _ = self.play_current_history()?;
+        } else if History::should_restart(self.sink.get_pos()) {
+            let _ = self.play_current_history()?;
+            self.ui.update(ui::Update::Restarted)?;
+        } else if let Some(track) = self.history.previous().cloned() {
+            self.play(track)?;
+        }
+        self.update_previous_capability()
+    }
+
+    /// Applies one command and publishes its observable state updates.
+    fn apply(&mut self, message: Message) -> crate::Result<bool> {
+        match message {
+            Message::Next if self.current.loading() => return Ok(false),
+            Message::Next | Message::Init => self.advance()?,
+            Message::Loaded if self.current.loading() => self.advance()?,
+            Message::Loaded => return Ok(false),
+            Message::Finished(generation) if generation == self.generation => self.advance()?,
+            Message::Finished(_) => return Ok(false),
+            Message::Previous => self.previous()?,
+            Message::PreviousAvailable(generation) if generation == self.generation => {
+                self.update_previous_capability()?
+            }
+            Message::PreviousAvailable(_) => return Ok(false),
+            Message::Play => {
+                self.sink.play();
+            }
+            Message::Pause => {
+                self.sink.pause();
+            }
+            Message::PlayPause => {
+                if self.sink.is_paused() {
                     self.sink.play();
-                }
-                Message::Pause => {
+                } else {
                     self.sink.pause();
                 }
-                Message::PlayPause => {
-                    if self.sink.is_paused() {
-                        self.sink.play();
-                    } else {
-                        self.sink.pause();
-                    }
-                }
-                Message::ChangeVolume(change) => {
-                    self.sink
-                        .set_volume((self.sink.volume() + change).clamp(0.0, 1.0));
-                    self.ui.update(ui::Update::Volume)?;
-                }
-                Message::SetVolume(set) => {
-                    self.sink.set_volume(set.clamp(0.0, 1.0));
-                    self.ui.update(ui::Update::Volume)?;
-                }
-                Message::Bookmark => {
-                    let Current::Track(current) = &self.current else {
-                        continue;
-                    };
-
-                    let bookmarked = self.bookmarks.bookmark(current)?;
-                    self.ui.update(ui::Update::Bookmarked(bookmarked))?;
-                }
-                Message::Quit => break,
             }
+            Message::ChangeVolume(change) => {
+                self.sink
+                    .set_volume((self.sink.volume() + change).clamp(0.0, 1.0));
+                self.ui.update(ui::Update::Volume)?;
+            }
+            Message::SetVolume(volume) => {
+                self.sink.set_volume(volume.clamp(0.0, 1.0));
+                self.ui.update(ui::Update::Volume)?;
+            }
+            Message::Bookmark => {
+                let Current::Track(current) = &self.current else {
+                    return Ok(false);
+                };
+                let bookmarked = self.bookmarks.bookmark(current)?;
+                self.ui.update(ui::Update::Bookmarked(bookmarked))?;
+            }
+            Message::Quit => return Ok(false),
+        }
+        Ok(true)
+    }
 
+    /// Drives the existing terminal and native-adapter command loop.
+    pub async fn run(&mut self) -> crate::Result<()> {
+        while let Some(message) = self.rx.recv().await {
+            if message == Message::Quit {
+                break;
+            }
+            if !self.apply(message)? {
+                continue;
+            }
             #[cfg(feature = "mpris")]
             self.ui.mpris.handle(&message).await?;
-
             #[cfg(all(feature = "media-controls", windows))]
             if let Some(controls) = self.ui.media_controls.as_mut() {
                 controls.handle(&message)?;
             }
         }
-
         Ok(())
+    }
+}
+
+#[cfg(all(test, not(feature = "mpris")))]
+mod tests {
+    use super::{Current, Player};
+    use crate::ui::Update;
+    use crate::{
+        audio::waiter, bookmark::Bookmarks, downloader, tests::fixture, tracks::Queued, Message,
+    };
+    use rodio::queue::SourcesQueueOutput;
+    use std::time::Duration;
+
+    fn player() -> (Player, tokio::sync::broadcast::Receiver<Update>) {
+        let (player, receiver, _) = player_with_tracks([]);
+        (player, receiver)
+    }
+
+    fn player_with_tracks(
+        tracks: impl IntoIterator<Item = Queued>,
+    ) -> (
+        Player,
+        tokio::sync::broadcast::Receiver<Update>,
+        SourcesQueueOutput,
+    ) {
+        let (ui, receiver) = crate::ui::Handle::for_test();
+        let (_, rx) = tokio::sync::mpsc::channel(1);
+        let (sink, output) = rodio::Player::new();
+        (
+            Player {
+                bookmarks: Bookmarks {
+                    entries: Vec::new(),
+                },
+                current: Default::default(),
+                downloader: downloader::Handle::with_tracks(tracks),
+                sink: std::sync::Arc::new(sink),
+                ui,
+                rx,
+                waiter: waiter::Handle::idle(),
+                history: Default::default(),
+                generation: 0,
+            },
+            receiver,
+            output,
+        )
+    }
+
+    fn current_name(player: &Player) -> &str {
+        match &player.current {
+            Current::Track(track) => &track.display,
+            Current::Loading(_) => panic!("expected a playing track"),
+        }
+    }
+
+    fn render(output: &mut SourcesQueueOutput, samples: usize) {
+        for sample in output.by_ref().take(samples) {
+            assert!(sample.is_finite());
+        }
+    }
+
+    fn handle_while_rendering(
+        player: &mut Player,
+        output: &mut SourcesQueueOutput,
+        message: Message,
+    ) -> bool {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let command = scope.spawn(|| sender.send(player.apply(message)).unwrap());
+            for _ in 0..100_000 {
+                if let Ok(outcome) = receiver.try_recv() {
+                    command.join().unwrap();
+                    return outcome.unwrap();
+                }
+                assert!(output.next().is_some_and(|sample| sample.is_finite()));
+                std::thread::yield_now();
+            }
+            panic!("playback command did not finish while rendering offline");
+        })
+    }
+
+    #[test]
+    fn playback_commands_transition_valid_tracks_and_preserve_pause() {
+        let tracks = [fixture::queued("one"), fixture::queued("two")];
+        let (mut player, mut updates, mut output) = player_with_tracks(tracks);
+
+        assert_eq!(player.apply(Message::Init).unwrap(), true);
+        assert_eq!(current_name(&player), "one");
+        assert_eq!(player.generation, 1);
+        render(&mut output, 1_024);
+        assert!(player.sink.get_pos() > Duration::ZERO);
+        assert!(
+            matches!(updates.try_recv(), Ok(Update::Track(Current::Track(track))) if track.display == "one")
+        );
+        assert!(matches!(updates.try_recv(), Ok(Update::Bookmarked(false))));
+        assert!(matches!(
+            updates.try_recv(),
+            Ok(Update::CanGoPrevious(false))
+        ));
+
+        player.apply(Message::Pause).unwrap();
+        assert!(player.sink.is_paused());
+        assert_eq!(
+            handle_while_rendering(&mut player, &mut output, Message::Next),
+            true
+        );
+        assert_eq!(current_name(&player), "two");
+        assert_eq!(player.generation, 2);
+        assert!(player.sink.is_paused());
+        assert!(
+            matches!(updates.try_recv(), Ok(Update::Track(Current::Track(track))) if track.display == "two")
+        );
+        assert!(matches!(updates.try_recv(), Ok(Update::Bookmarked(false))));
+        assert!(matches!(
+            updates.try_recv(),
+            Ok(Update::CanGoPrevious(true))
+        ));
+
+        player.apply(Message::Play).unwrap();
+        assert!(!player.sink.is_paused());
+        assert_eq!(
+            handle_while_rendering(&mut player, &mut output, Message::Previous),
+            true
+        );
+        assert_eq!(current_name(&player), "one");
+        assert_eq!(player.generation, 3);
+        assert!(
+            matches!(updates.try_recv(), Ok(Update::Track(Current::Track(track))) if track.display == "one")
+        );
+        assert!(matches!(updates.try_recv(), Ok(Update::Bookmarked(false))));
+        assert!(matches!(
+            updates.try_recv(),
+            Ok(Update::CanGoPrevious(false))
+        ));
+
+        assert_eq!(
+            handle_while_rendering(&mut player, &mut output, Message::Next),
+            true
+        );
+        assert_eq!(current_name(&player), "two");
+        assert_eq!(player.generation, 4);
+    }
+
+    #[test]
+    fn matching_generation_advances_and_stale_messages_preserve_transition_state() {
+        let tracks = [fixture::queued("one"), fixture::queued("two")];
+        let (mut player, mut updates, mut output) = player_with_tracks(tracks);
+        player.apply(Message::Init).unwrap();
+        render(&mut output, 1_024);
+        while updates.try_recv().is_ok() {}
+        let first_generation = player.generation;
+
+        assert_eq!(
+            handle_while_rendering(
+                &mut player,
+                &mut output,
+                Message::Finished(first_generation)
+            ),
+            true
+        );
+        assert_eq!(current_name(&player), "two");
+        let second_generation = player.generation;
+        while updates.try_recv().is_ok() {}
+
+        assert_eq!(
+            player.apply(Message::Finished(first_generation)).unwrap(),
+            false
+        );
+        assert_eq!(
+            player
+                .apply(Message::PreviousAvailable(first_generation))
+                .unwrap(),
+            false
+        );
+        assert_eq!(current_name(&player), "two");
+        assert_eq!(player.generation, second_generation);
+        assert!(updates.try_recv().is_err());
+
+        assert_eq!(
+            player
+                .apply(Message::PreviousAvailable(second_generation))
+                .unwrap(),
+            true
+        );
+        assert!(matches!(
+            updates.try_recv(),
+            Ok(Update::CanGoPrevious(true))
+        ));
+    }
+
+    #[test]
+    fn loaded_is_ignored_after_a_track_has_started() {
+        let (mut player, mut updates, _) = player_with_tracks([fixture::queued("one")]);
+        player.apply(Message::Init).unwrap();
+        while updates.try_recv().is_ok() {}
+
+        assert_eq!(player.apply(Message::Loaded).unwrap(), false);
+        assert_eq!(current_name(&player), "one");
+        assert!(updates.try_recv().is_err());
+    }
+
+    #[test]
+    fn previous_restarts_a_rendered_track_after_three_seconds() {
+        let (mut player, mut updates, mut output) = player_with_tracks([fixture::queued("one")]);
+        player.apply(Message::Init).unwrap();
+        while updates.try_recv().is_ok() {}
+        render(&mut output, 160_000);
+        assert!(player.sink.get_pos() >= Duration::from_secs(3));
+        assert!(player.can_go_previous());
+
+        handle_while_rendering(&mut player, &mut output, Message::Previous);
+        assert_eq!(current_name(&player), "one");
+        assert_eq!(player.generation, 2);
+        assert!(
+            matches!(updates.try_recv(), Ok(Update::Track(Current::Track(track))) if track.display == "one")
+        );
+        assert!(matches!(updates.try_recv(), Ok(Update::Bookmarked(false))));
+        assert!(matches!(updates.try_recv(), Ok(Update::CanGoPrevious(_))));
+        assert!(matches!(updates.try_recv(), Ok(Update::Restarted)));
+        assert!(matches!(updates.try_recv(), Ok(Update::CanGoPrevious(_))));
+    }
+
+    #[test]
+    fn stale_generation_messages_are_ignored() {
+        let (mut player, mut receiver) = player();
+        assert_eq!(player.apply(Message::Finished(1)).unwrap(), false);
+        assert_eq!(player.apply(Message::PreviousAvailable(1)).unwrap(), false);
+        assert!(receiver.try_recv().is_err());
     }
 }

@@ -9,6 +9,7 @@ pub mod bookmark;
 pub mod config;
 pub mod downloader;
 pub mod error;
+mod history;
 pub mod message;
 pub mod player;
 #[cfg(feature = "scrape")]

@@ -109,6 +109,8 @@ impl State {
 /// contains the new information about the track.
 #[derive(Debug, Clone)]
 pub enum Update {
+    CanGoPrevious(bool),
+    Restarted,
     Track(Current),
     Bookmarked(bool),
     Volume,
@@ -134,6 +136,20 @@ pub struct Handle {
 }
 
 impl Handle {
+    #[cfg(all(test, not(feature = "mpris")))]
+    pub(crate) fn for_test() -> (Self, broadcast::Receiver<Update>) {
+        let (updater, receiver) = broadcast::channel(8);
+        (
+            Self {
+                updater,
+                logger: interface::Logger::for_test(),
+                #[cfg(all(feature = "media-controls", windows))]
+                media_controls: None,
+            },
+            receiver,
+        )
+    }
+
     /// Sends a `ui::Update` to the broadcast channel.
     pub fn update(&mut self, update: Update) -> crate::Result<()> {
         self.updater.send(update)?;
@@ -166,6 +182,7 @@ pub async fn run(
                 Update::Bookmarked(bookmarked) => state.bookmarked = bookmarked,
                 Update::Volume => state.volume_timer = Some(Instant::now()),
                 Update::Quit => break,
+                Update::CanGoPrevious(_) | Update::Restarted => {}
             }
         }
 

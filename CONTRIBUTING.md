@@ -77,3 +77,8 @@ Inspect `mutants.out/missed.txt`, `timeout.txt`, `unviable.txt`, and
 `outcomes.json`; timeouts and execution errors require investigation. Use
 `cargo mutants --test-tool cargo` only when nextest is unavailable, and never
 retry a failed nextest run automatically with another runner.
+
+History mutation coverage includes the bounded model and player transitions.
+Player initialization, persistence, and the native command loop are excluded;
+dispatch tests use an in-memory terminal handle, and waiter tests render audio
+without a device. MPRIS adapter tests need no session bus.

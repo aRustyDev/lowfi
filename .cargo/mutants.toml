@@ -2,6 +2,8 @@
 # adapters have dedicated configurations because their compiled feature sets
 # and test boundaries differ by platform.
 examine_globs = [
+    "src/history.rs",
+    "src/player.rs",
     "src/config.rs",
     "src/ui/input.rs",
 ]
@@ -13,7 +15,7 @@ exclude_globs = [
 ]
 # EventStream owns a terminal event loop and cannot be exercised without a
 # terminal. `message_for` below it remains in scope.
-exclude_re = ["listen", "Player::close"]
+exclude_re = ["listen", "Player::close", "Player::init", "Player::run"]
 additional_cargo_args = ["--locked"]
 test_tool = "nextest"
 minimum_test_timeout = 20

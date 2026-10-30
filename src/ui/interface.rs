@@ -21,6 +21,11 @@ pub use window::Window;
 pub struct Logger(mpsc::Sender<String>);
 
 impl Logger {
+    #[cfg(all(test, not(feature = "mpris")))]
+    pub(super) fn for_test() -> Self {
+        Self(mpsc::channel(1).0)
+    }
+
     /// Send an informational log.
     pub async fn info(&self, message: String) -> ui::Result<()> {
         self.0.send(message).await?;
