@@ -1,0 +1,90 @@
+name: Test tooling
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_mutations:
+        description: Run the manual native mutation suite
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install ALSA development headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install test tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.140 cargo-feature-combinations@0.7.0
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run standard tests
+        run: cargo test --locked
+      - name: Run default tests with nextest
+        run: cargo nextest run --locked
+      - name: Run no-default-features tests with nextest
+        run: cargo nextest run --locked --no-default-features
+      - name: Run maximal Linux feature tests with nextest
+        run: cargo nextest run --locked --features mpris,scrape,extra-audio-formats
+      - name: Run maximal Linux no-default-features tests with nextest
+        run: cargo nextest run --locked --no-default-features --features mpris,scrape,extra-audio-formats
+      - name: Check curated Linux feature combinations
+        run: cargo fc check --locked --all-targets
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install test tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.140 cargo-feature-combinations@0.7.0
+      - name: Run default tests with nextest
+        run: cargo nextest run --locked
+      - name: Run no-default-features tests with nextest
+        run: cargo nextest run --locked --no-default-features
+      - name: Run maximal Windows feature tests with nextest
+        run: cargo nextest run --locked --features media-controls,scrape,extra-audio-formats
+      - name: Run maximal Windows no-default-features tests with nextest
+        run: cargo nextest run --locked --no-default-features --features media-controls,scrape,extra-audio-formats
+      - name: Check curated Windows feature combinations
+        run: cargo fc check --locked --all-targets
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install test tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.140 cargo-feature-combinations@0.7.0
+      - name: Run default tests with nextest
+        run: cargo nextest run --locked
+      - name: Run no-default-features tests with nextest
+        run: cargo nextest run --locked --no-default-features
+      - name: Run maximal macOS feature tests with nextest
+        run: cargo nextest run --locked --features menubar,macos-app,scrape,extra-audio-formats
+      - name: Run maximal macOS no-default-features tests with nextest
+        run: cargo nextest run --locked --no-default-features --features menubar,macos-app,scrape,extra-audio-formats
+      - name: Check curated macOS feature combinations
+        run: cargo fc check --locked --all-targets
+
+  # Each mutation rebuilds/tests changed code. Keep this deeper investigation
+  # opt-in so normal PR feedback stays bounded; reports still expose failures.
+  mutation:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_mutations
+    uses: ./.github/workflows/mutation.yml

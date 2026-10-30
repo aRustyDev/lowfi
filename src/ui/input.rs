@@ -7,6 +7,7 @@ use futures_util::{FutureExt, StreamExt};
 use tokio::sync::mpsc::Sender;
 
 /// Starts the listener to receive input from the terminal for various events.
+#[cfg_attr(test, mutants::skip)]
 pub async fn listen(sender: Sender<Message>, bindings: BindingMap) -> super::Result<()> {
     let mut reader = EventStream::new();
 
@@ -40,6 +41,7 @@ fn message_for(code: KeyCode, modifiers: KeyModifiers, bindings: &BindingMap) ->
             | event::MediaKeyCode::PlayPause => Some(Message::PlayPause),
             event::MediaKeyCode::Stop => Some(Message::Pause),
             event::MediaKeyCode::TrackNext => Some(Message::Next),
+            event::MediaKeyCode::TrackPrevious => Some(Message::Previous),
             event::MediaKeyCode::LowerVolume => Some(Message::ChangeVolume(-0.1)),
             event::MediaKeyCode::RaiseVolume => Some(Message::ChangeVolume(0.1)),
             event::MediaKeyCode::MuteVolume => Some(Message::ChangeVolume(-1.0)),
@@ -56,18 +58,115 @@ mod tests {
 
     #[test]
     fn bindings_are_case_insensitive_and_ctrl_c_is_reserved() {
-        let (_, bindings) = crate::config::load(
-            Path::new("missing.toml"),
-            crate::config::CliOverrides::default(),
-        )
-        .unwrap();
-        assert_eq!(
-            message_for(KeyCode::Char('P'), KeyModifiers::NONE, &bindings),
-            Some(Message::PlayPause)
-        );
-        assert_eq!(
-            message_for(KeyCode::Char('c'), KeyModifiers::CONTROL, &bindings),
-            Some(Message::Quit)
-        );
+        figment::Jail::expect_with(|_| {
+            let (_, bindings) = crate::config::load(
+                Path::new("missing.toml"),
+                crate::config::CliOverrides::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                message_for(KeyCode::Char('P'), KeyModifiers::NONE, &bindings),
+                Some(Message::PlayPause)
+            );
+            assert_eq!(
+                message_for(KeyCode::Char('c'), KeyModifiers::CONTROL, &bindings),
+                Some(Message::Quit)
+            );
+            assert_ne!(
+                message_for(KeyCode::Char('c'), KeyModifiers::NONE, &bindings),
+                Some(Message::Quit)
+            );
+            assert_eq!(
+                message_for(KeyCode::Up, KeyModifiers::NONE, &bindings),
+                Some(Message::ChangeVolume(0.1))
+            );
+            assert_eq!(
+                message_for(KeyCode::Down, KeyModifiers::NONE, &bindings),
+                Some(Message::ChangeVolume(-0.1))
+            );
+            assert_eq!(
+                message_for(KeyCode::Right, KeyModifiers::NONE, &bindings),
+                Some(Message::ChangeVolume(0.01))
+            );
+            assert_eq!(
+                message_for(KeyCode::Left, KeyModifiers::NONE, &bindings),
+                Some(Message::ChangeVolume(-0.01))
+            );
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn media_keys_and_unmapped_input_are_handled_explicitly() {
+        figment::Jail::expect_with(|_| {
+            let (_, bindings) = crate::config::load(
+                Path::new("missing.toml"),
+                crate::config::CliOverrides::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                message_for(
+                    KeyCode::Media(event::MediaKeyCode::PlayPause),
+                    KeyModifiers::NONE,
+                    &bindings,
+                ),
+                Some(Message::PlayPause)
+            );
+            assert_eq!(
+                message_for(
+                    KeyCode::Media(event::MediaKeyCode::Stop),
+                    KeyModifiers::NONE,
+                    &bindings,
+                ),
+                Some(Message::Pause)
+            );
+            assert_eq!(
+                message_for(
+                    KeyCode::Media(event::MediaKeyCode::TrackNext),
+                    KeyModifiers::NONE,
+                    &bindings,
+                ),
+                Some(Message::Next)
+            );
+            assert_eq!(
+                message_for(
+                    KeyCode::Media(event::MediaKeyCode::RaiseVolume),
+                    KeyModifiers::NONE,
+                    &bindings,
+                ),
+                Some(Message::ChangeVolume(0.1))
+            );
+            assert_eq!(
+                message_for(
+                    KeyCode::Media(event::MediaKeyCode::LowerVolume),
+                    KeyModifiers::NONE,
+                    &bindings,
+                ),
+                Some(Message::ChangeVolume(-0.1))
+            );
+            assert_eq!(
+                message_for(
+                    KeyCode::Media(event::MediaKeyCode::MuteVolume),
+                    KeyModifiers::NONE,
+                    &bindings,
+                ),
+                Some(Message::ChangeVolume(-1.0))
+            );
+            assert_eq!(
+                message_for(
+                    KeyCode::Media(event::MediaKeyCode::TrackPrevious),
+                    KeyModifiers::NONE,
+                    &bindings,
+                ),
+                Some(Message::Previous)
+            );
+            assert_eq!(
+                message_for(KeyCode::F(1), KeyModifiers::NONE, &bindings),
+                None
+            );
+
+            Ok(())
+        });
     }
 }

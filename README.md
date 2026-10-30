@@ -186,7 +186,7 @@ slightly tweak the UI or behavior of the menu. The flags can be viewed with `low
 | `-f`, `--fps`                       | FPS of the UI [default: 12]                         |
 | `--timeout`                         | Timeout in seconds for music downloads [default: 16] |
 | `-d`, `--debug`                     | Include ALSA & other logs meant for debugging       |
-| `-w`, `--width <WIDTH>`             | Width of the player, from 0 to 32 [default: 3]      |
+| `-w`, `--width <WIDTH>`             | Player width, capped at 32 [default: 3]              |
 | `-t`, `--track-list <TRACK_LIST>`   | Use a [custom track list](#custom-track-lists)      |
 | `-s`, `--buffer-size <BUFFER_SIZE>` | Internal song buffer size [default: 5]              |
 
@@ -194,49 +194,24 @@ If you need something even more specific, see [ENVIRONMENT_VARS](./docs/ENVIRONM
 
 ### Configuration
 
-Lowfi also reads an optional `config.toml` from its platform data directory:
-`~/.local/share/lowfi/config.toml` on Linux, `%APPDATA%\\lowfi\\config.toml` on
-Windows, and `~/Library/Application Support/lowfi/config.toml` on macOS. It never
-creates or overwrites this file.
-
-Settings are resolved in this order: built-in defaults, `config.toml`, `LOWFI_*`
-environment variables, then explicitly supplied command-line flags. Environment
-variables use `LOWFI_<SECTION>__<FIELD>` names, such as `LOWFI_UI__FPS=20`,
-`LOWFI_PLAYBACK__PAUSED=false`, or `LOWFI_BINDINGS__NEXT='["n", "x"]'`.
+Save persistent settings in an optional `config.toml` in Lowfi's platform data
+directory. Include only the values you want to change, for example:
 
 ```toml
 [playback]
-paused = false
-track_list = "chillhop"
-buffer_size = 5
-timeout = 16
-debug = false
+paused = true
 
 [ui]
-alternate = false
-minimalist = false
-borderless = false
-clock = false
-fps = 12
-width = 3
+fps = 20
 
 [bindings]
-play_pause = ["p", "Space"]
-next = ["s", "n", "l"]
-quit = ["q"]
-bookmark = ["b"]
-volume_up = ["+", "=", "k", "Up"]
-volume_down = ["-", "_", "j", "Down"]
-volume_up_fine = ["Right"]
-volume_down_fine = ["Left"]
+next = ["x"]
 ```
 
-Bindings accept one printable character, `Space`, `Up`, `Down`, `Left`, and
-`Right`; names are case-insensitive. Supplying a binding list replaces that
-action's defaults, while an empty list disables that action's configurable keys.
-`Ctrl+C` remains reserved for quitting. Invalid values, unknown fields, and
-duplicate keys stop startup with an error that identifies the field and source.
-The terminal's small control hints continue to show the default keys.
+Settings resolve from defaults, then the file, then `LOWFI_*` environment
+variables, then explicit CLI flags. Restart Lowfi to pick up file changes.
+See [Configuration](docs/CONFIGURATION.md) for file locations, every option and
+default, environment syntax, binding rules, and validation errors.
 
 ### Extra Features
 
@@ -354,3 +329,73 @@ file:///home/user/Other Music/second-file.mp3
 ```
 
 Further examples can be found in the [data](https://github.com/talwat/lowfi/tree/main/data) folder.
+
+Playback and frontend responsibilities are described in [the architecture notes](docs/ARCHITECTURE.md).
+
+### Playback history
+
+Lowfi retains the current track and ten previous tracks as compressed audio for
+the current session. Press `h` (configurable as `bindings.previous`), use a
+terminal Previous media key, or use Linux MPRIS Previous. At three seconds or
+later Previous restarts the current track; earlier it selects a retained previous
+track. Next traverses retained forward tracks before downloading again. During
+loading, Previous returns to the retained current track. The terminal layout and
+displayed control bar stay unchanged. Windows SMTC Previous remains unavailable.
+
+### macOS menu bar
+
+On macOS, build or run Lowfi with its optional native menu-bar interface:
+
+```sh
+cargo run --features menubar
+# or
+cargo build --release --features menubar
+./target/release/lowfi
+```
+
+The feature keeps the existing `lowfi` command and playback session. It adds a
+menu-bar icon with current-track status, Play/Pause, Next, and Quit. Menu-only
+operation stays in the foreground; it does not detach the process or create a
+launchd service.
+
+Set `[interfaces].mode` in `config.toml`, or use
+`LOWFI_INTERFACES__MODE` (`terminal`, `terminal-and-menubar`, or `menubar`). A
+feature-enabled macOS build defaults to `terminal-and-menubar`; all other builds
+default to `terminal`. `menubar` suppresses terminal setup and input, while
+`LOWFI_DISABLE_UI=1` also suppresses terminal setup when a menu is active.
+
+### macOS application bundle
+
+On macOS, create a Finder- and Spotlight-discoverable application bundle with:
+
+```sh
+packaging/macos/build-app.sh
+```
+
+The script requires Rust and macOS's `plutil` utility. It writes `Lowfi.app` to
+`target/<native-target>/release/bundle/Lowfi.app`; it does not install or sign
+the app. To install it for the current machine:
+
+```sh
+cp -R target/"$(rustc -vV | sed -n 's/^host: //p')"/release/bundle/Lowfi.app /Applications/
+open /Applications/Lowfi.app
+```
+
+Finder and Spotlight discover applications placed in `/Applications`. Launching
+Lowfi.app opens the existing terminal interface in Terminal.app, so its controls
+and configuration behave exactly as they do for `lowfi`. To supply command-line
+flags, run the bundled executable directly, for example:
+
+```sh
+/Applications/Lowfi.app/Contents/MacOS/lowfi --paused
+```
+
+macOS usually registers an application when Finder sees it or after the next
+login. If Spotlight has not indexed a newly copied bundle, open it once in
+Finder; developers can also force Launch Services registration with
+`lsregister -f /Applications/Lowfi.app`.
+
+`packaging/macos/Lowfi.png` and `Lowfi.icns` are generated from the existing
+white `docs/media/logo.svg` on a dark neutral background: render it at 1024×1024
+with `rsvg-convert`, create the standard `.iconset` PNG sizes with `sips`, then
+run `iconutil -c icns Lowfi.iconset -o Lowfi.icns`.

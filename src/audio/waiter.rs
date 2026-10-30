@@ -1,52 +1,142 @@
-use std::{sync::Arc, time::Duration};
+//! Watches the current playback generation without owning an audio device.
+//!
+//! Completion and restart-capability messages carry the observed generation.
+//! Only newly appended playheads start observation; entering loading invalidates
+//! the player's old generation without starting a new observation here.
 
+use std::{sync::Arc, time::Duration};
 use tokio::{
-    sync::{mpsc, Notify},
+    sync::{mpsc, watch},
     time,
 };
 
-/// Background loop that waits for the sink to drain and then attempts
-/// to send a `Message::Next` to the provided channel.
 async fn waiter(
     sink: Arc<rodio::Player>,
     tx: mpsc::Sender<crate::Message>,
-    notify: Arc<Notify>,
+    mut generations: watch::Receiver<u64>,
 ) -> crate::Result<()> {
-    loop {
-        notify.notified().await;
-
-        while !sink.empty() {
-            time::sleep(Duration::from_millis(16)).await;
-        }
-
-        if tx.try_send(crate::Message::Next).is_err() {
-            break Ok(());
+    while generations.changed().await.is_ok() {
+        let mut generation = *generations.borrow_and_update();
+        let mut previous_announced = false;
+        loop {
+            tokio::select! {
+                changed = generations.changed() => {
+                    if changed.is_err() { return Ok(()); }
+                    generation = *generations.borrow_and_update();
+                    previous_announced = false;
+                }
+                _ = time::sleep(Duration::from_millis(16)) => {
+                    if !previous_announced && sink.get_pos() >= crate::history::History::RESTART_AFTER {
+                        tx.send(crate::Message::PreviousAvailable(generation)).await?;
+                        previous_announced = true;
+                    }
+                    if sink.empty() {
+                        tx.send(crate::Message::Finished(generation)).await?;
+                        break;
+                    }
+                }
+            }
         }
     }
+    Ok(())
 }
 
-/// Lightweight helper that waits for the current sink to drain and then
-/// notifies the player to advance to the next track.
+/// Publishes the generation whose playback should be observed.
 pub struct Handle {
-    /// Notification primitive used to wake the waiter.
-    notify: Arc<Notify>,
+    generations: watch::Sender<u64>,
 }
 
 impl Handle {
-    /// Notify the waiter that playback state may have changed and it should
-    /// re-check the sink emptiness condition.
-    pub fn notify(&self) {
-        self.notify.notify_one();
+    #[cfg(test)]
+    pub(crate) fn idle() -> Self {
+        let (generations, _) = watch::channel(0);
+        Self { generations }
+    }
+
+    /// Observes the newly appended playhead under a fresh generation ID.
+    ///
+    /// Pending notifications can be replaced before they are observed. Events
+    /// already queued keep their old IDs, so the player must reject stale ones.
+    pub fn notify(&self, generation: u64) {
+        self.generations.send_replace(generation);
     }
 }
 
 impl crate::Tasks {
-    /// Create a new `Handle` which watches the provided `sink` and sends
-    /// `Message::Next` down `tx` when the sink becomes empty.
+    /// Watches appended playheads and sends generation-tagged completion/capability events.
     pub fn waiter(&mut self, sink: Arc<rodio::Player>) -> Handle {
-        let notify = Arc::new(Notify::new());
-        self.spawn(waiter(sink, self.tx(), notify.clone()));
+        let (generations, receiver) = watch::channel(0);
+        self.spawn(waiter(sink, self.tx(), receiver));
+        Handle { generations }
+    }
+}
 
-        Handle { notify }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{tests::fixture, Message};
+
+    #[tokio::test]
+    async fn observes_restart_threshold_and_completion_from_real_playback() {
+        let (sink, mut output) = rodio::Player::new();
+        let sink = Arc::new(sink);
+        sink.append(fixture::queued("waiter").decode().unwrap().data);
+        let (sender, mut messages) = mpsc::channel(8);
+        let (generations, receiver) = watch::channel(0);
+        let task = tokio::spawn(waiter(sink.clone(), sender, receiver));
+        let handle = Handle { generations };
+        handle.notify(7);
+        for _ in 0..160_000 {
+            output.next().unwrap();
+        }
+        assert!(sink.get_pos() >= crate::history::History::RESTART_AFTER);
+        assert_eq!(
+            time::timeout(Duration::from_secs(1), messages.recv())
+                .await
+                .unwrap(),
+            Some(Message::PreviousAvailable(7))
+        );
+        for _ in 0..100_000 {
+            output.next().unwrap();
+        }
+        assert!(sink.empty());
+        assert_eq!(
+            time::timeout(Duration::from_secs(1), messages.recv())
+                .await
+                .unwrap(),
+            Some(Message::Finished(7))
+        );
+        assert!(messages.try_recv().is_err());
+        drop(handle);
+        time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn replaces_pending_generations_and_closes_cleanly() {
+        let (sink, _) = rodio::Player::new();
+        let (sender, mut messages) = mpsc::channel(8);
+        let (generations, receiver) = watch::channel(0);
+        let task = tokio::spawn(waiter(Arc::new(sink), sender, receiver));
+        let handle = Handle { generations };
+        handle.notify(1);
+        tokio::task::yield_now().await;
+        handle.notify(2);
+        assert_eq!(
+            time::timeout(Duration::from_secs(1), messages.recv())
+                .await
+                .unwrap(),
+            Some(Message::Finished(2))
+        );
+        assert!(messages.try_recv().is_err());
+        drop(handle);
+        time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
 }

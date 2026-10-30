@@ -23,13 +23,13 @@ pub use error::{Error, Result};
 
 use crate::tracks::error::WithTrackContext as _;
 
-/// Just a shorthand for a decoded [Bytes].
+/// Lazy audio decoder backed by in-memory compressed [`Bytes`].
 pub type DecodedData = Decoder<Cursor<Bytes>>;
 
 /// Tracks which are still waiting in the queue, and can't be played yet.
 ///
 /// This means that only the data & track name are included.
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Queued {
     /// Display name of the track.
     pub display: String,
@@ -53,9 +53,8 @@ impl Debug for Queued {
 }
 
 impl Queued {
-    /// This will actually decode and format the track,
-    /// returning a [`DecodedTrack`] which can be played
-    /// and also has a duration & formatted name.
+    /// Decodes the stored audio and derives playback metadata in a [`Decoded`].
+    /// Returns an error if the audio cannot be decoded.
     pub fn decode(self) -> Result<Decoded> {
         Decoded::new(self)
     }
@@ -75,10 +74,8 @@ impl Queued {
     }
 }
 
-/// The [`Info`] struct, which has the name and duration of a track.
-///
-/// This is not included in [Track] as the duration has to be acquired
-/// from the decoded data and not from the raw data.
+/// Track metadata derived when compressed audio is prepared for playback.
+/// Duration is discovered through the decoder, so it is not part of [`Queued`].
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Info {
     /// The full downloadable path/url of the track.
@@ -87,8 +84,7 @@ pub struct Info {
     /// This is a formatted name, so it doesn't include the full path.
     pub display: String,
 
-    /// This is the *actual* terminal width of the track name, used to make
-    /// the UI consistent.
+    /// Grapheme count used to size the track name in the terminal UI.
     pub width: usize,
 
     /// The duration of the track, this is an [Option] because there are
@@ -117,8 +113,7 @@ impl Info {
     }
 }
 
-/// This struct is separate from [Track] since it is generated lazily from
-/// a track, and not when the track is first downloaded.
+/// Audio decoder and metadata created from a [`Queued`] track at playback time.
 pub struct Decoded {
     /// Has both the formatted name and some information from the decoded data.
     pub info: Info,
@@ -129,7 +124,7 @@ pub struct Decoded {
 
 impl Decoded {
     /// Creates a new track.
-    /// This is equivalent to [`QueuedTrack::decode`].
+    /// This is equivalent to [`Queued::decode`].
     pub fn new(track: Queued) -> Result<Self> {
         let (path, display) = (track.path.clone(), track.display.clone());
         let data = Decoder::builder()

@@ -62,7 +62,7 @@ pub struct Downloader {
     queue: mpsc::Sender<tracks::Queued>,
 
     /// The [`mpsc::Sender`] which is used to inform the
-    /// [`crate::Player`] with [`crate::Message::Loaded`].
+    /// [`crate::player::Player`] with [`crate::Message::Loaded`].
     tx: mpsc::Sender<crate::Message>,
 
     /// The list of tracks to download from.
@@ -169,6 +169,16 @@ pub enum Output {
 }
 
 impl Handle {
+    #[cfg(test)]
+    pub(crate) fn with_tracks(tracks: impl IntoIterator<Item = tracks::Queued>) -> Self {
+        let tracks: Vec<_> = tracks.into_iter().collect();
+        let (sender, queue) = mpsc::channel(tracks.len().max(1));
+        for track in tracks {
+            sender.try_send(track).unwrap();
+        }
+        Self { queue }
+    }
+
     /// Gets either a queued track, or a progress report,
     /// depending on the state of the internal download buffer.
     #[rustfmt::skip]
@@ -184,7 +194,8 @@ impl Handle {
 impl crate::Tasks {
     /// Initializes the downloader with a track list.
     ///
-    /// `tx` specifies the [`Sender`] to be notified with [`crate::Message::Loaded`].
+    /// Uses the owning task group's command sender for [`crate::Message::Loaded`]
+    /// notifications when a track arrives after the player has entered loading.
     pub fn downloader(
         &mut self,
         settings: &crate::config::Settings,

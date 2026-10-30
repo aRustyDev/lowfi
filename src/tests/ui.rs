@@ -83,8 +83,13 @@ mod window {
         let (render, height) = w.render(vec![String::from("abc")]).unwrap();
 
         const MIDDLE: &str = "─────";
-        assert_eq!(format!("┌{MIDDLE}┐\n{}\n└{MIDDLE}┘", sided("abc")), render);
-        assert_eq!(height, 3);
+        assert_eq!(
+            format!("┌{MIDDLE}┐\n{}\n└{MIDDLE}┘", sided("abc")).trim_end(),
+            render.trim_end()
+        );
+        // Lowfi's renderer adds a final row on Windows to avoid repeatedly
+        // writing to the terminal's last line; the visible content is identical.
+        assert_eq!(height, if cfg!(windows) { 4 } else { 3 });
     }
 
     #[test]
@@ -106,9 +111,9 @@ mod window {
                 sided(" b "),
                 sided("c  "),
             ),
-            render
+            render.trim_end()
         );
-        assert_eq!(height, 5);
+        assert_eq!(height, if cfg!(windows) { 6 } else { 5 });
     }
 
     #[test]
@@ -126,7 +131,7 @@ mod interface {
 
     use crate::{
         downloader::Progress,
-        player::Current,
+        player::{Current, PlaybackView, State as PlayerState},
         tracks,
         ui::{Interface, State},
     };
@@ -134,7 +139,10 @@ mod interface {
     #[tokio::test]
     async fn loading() {
         let sink = Arc::new(rodio::Player::new().0);
-        let mut state = State::initial(sink, String::from("test"));
+        let mut state = State::new(PlayerState::initial(
+            PlaybackView::new(sink),
+            String::from("test"),
+        ));
         let menu = Interface::default().menu(&mut state);
 
         assert_eq!(menu[0], "loading                    ");
@@ -155,7 +163,10 @@ mod interface {
         let sink = Arc::new(rodio::Player::new().0);
         sink.set_volume(0.5);
 
-        let mut state = State::initial(sink, String::from("test"));
+        let mut state = State::new(PlayerState::initial(
+            PlaybackView::new(sink),
+            String::from("test"),
+        ));
         state.volume_timer = Some(Instant::now());
 
         let menu = Interface::default().menu(&mut state);
@@ -176,8 +187,11 @@ mod interface {
     async fn progress() {
         let sink = Arc::new(rodio::Player::new().0);
         Progress::new().set(0.5);
-        let mut state = State::initial(sink, String::from("test"));
-        state.current = Current::Loading(Some(Progress::new()));
+        let mut state = State::new(PlayerState::initial(
+            PlaybackView::new(sink),
+            String::from("test"),
+        ));
+        state.player.current = Current::Loading(Some(Progress::new()));
 
         let menu = Interface::default().menu(&mut state);
 
@@ -204,8 +218,11 @@ mod interface {
             duration: Some(Duration::from_secs(8)),
         };
 
-        let mut state = State::initial(sink, String::from("test"));
-        state.current = Current::Track(track.clone());
+        let mut state = State::new(PlayerState::initial(
+            PlaybackView::new(sink),
+            String::from("test"),
+        ));
+        state.player.current = Current::Track(track.clone());
         let menu = Interface::default().menu(&mut state);
 
         assert_eq!(
@@ -221,6 +238,36 @@ mod interface {
                 "[p]".bold(),
                 "[q]".bold()
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn paused_muted_and_bookmarked_tracks_keep_their_rendering() {
+        let sink = Arc::new(rodio::Player::new().0);
+        let track = tracks::Info {
+            path: "/path".to_owned(),
+            display: "Test Track".to_owned(),
+            width: 10,
+            duration: Some(Duration::from_secs(8)),
+        };
+        let mut state = State::new(PlayerState::initial(
+            PlaybackView::new(Arc::clone(&sink)),
+            String::from("test"),
+        ));
+        state.player.current = Current::Track(track.clone());
+        state.player.bookmarked = true;
+
+        sink.pause();
+        assert_eq!(
+            Interface::default().menu(&state)[0],
+            format!("paused *{}         ", track.display.bold())
+        );
+
+        sink.set_volume(0.0);
+        state.player.bookmarked = false;
+        assert_eq!(
+            Interface::default().menu(&state)[0],
+            format!("muted, {}", "+ to increase volume".bold())
         );
     }
 }

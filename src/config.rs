@@ -1,4 +1,7 @@
 //! Loading and validating Lowfi's user configuration.
+//!
+//! Resolve settings through `load` before starting playback or terminal tasks.
+//! The user-facing option reference is in `docs/CONFIGURATION.md`.
 
 use std::{
     collections::HashMap,
@@ -14,12 +17,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::Message;
 
-/// Fully resolved application settings.
+/// Application settings after deserialization.
+///
+/// Use [`load`] to apply validation and compile key bindings. Deserializing this
+/// type alone does not enforce cross-field or binding constraints.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub playback: Playback,
     pub ui: Ui,
+    pub interfaces: Interfaces,
     pub bindings: Bindings,
 }
 
@@ -28,6 +35,7 @@ pub struct Settings {
 pub struct Playback {
     pub paused: bool,
     pub track_list: String,
+    /// Song-buffer setting, including the current track; must be at least two.
     pub buffer_size: u32,
     pub timeout: u64,
     pub debug: bool,
@@ -41,14 +49,48 @@ pub struct Ui {
     pub borderless: bool,
     pub clock: bool,
     pub fps: u8,
+    /// Sizing parameter, not terminal columns; the renderer caps it at 32.
     pub width: usize,
 }
 
+/// Which local interfaces should be started with the player.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InterfaceMode {
+    Terminal,
+    TerminalAndMenubar,
+    Menubar,
+}
+
+impl InterfaceMode {
+    pub const fn terminal(self) -> bool {
+        matches!(self, Self::Terminal | Self::TerminalAndMenubar)
+    }
+
+    pub const fn menubar(self) -> bool {
+        matches!(self, Self::Menubar | Self::TerminalAndMenubar)
+    }
+}
+
+/// Frontend configuration. The menu bar variants are available only on macOS
+/// builds compiled with the `menubar` feature.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Interfaces {
+    pub mode: InterfaceMode,
+}
+
+/// Configurable terminal keys, grouped by action.
+///
+/// Each supplied list replaces that action's defaults; an empty list removes its
+/// configurable keys. Media keys and reserved Ctrl+C handling live in the input
+/// layer and are not disabled by an empty list.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bindings {
     pub play_pause: Vec<String>,
     pub next: Vec<String>,
+    pub previous: Vec<String>,
     pub quit: Vec<String>,
     pub bookmark: Vec<String>,
     pub volume_up: Vec<String>,
@@ -75,9 +117,17 @@ impl Default for Settings {
                 fps: 12,
                 width: 3,
             },
+            interfaces: Interfaces {
+                mode: if cfg!(all(target_os = "macos", feature = "menubar")) {
+                    InterfaceMode::TerminalAndMenubar
+                } else {
+                    InterfaceMode::Terminal
+                },
+            },
             bindings: Bindings {
                 play_pause: vec!["p".into(), "Space".into()],
                 next: vec!["s".into(), "n".into(), "l".into()],
+                previous: vec!["h".into()],
                 quit: vec!["q".into()],
                 bookmark: vec!["b".into()],
                 volume_up: vec!["+".into(), "=".into(), "k".into(), "Up".into()],
@@ -129,6 +179,10 @@ struct UiOverrides {
 }
 
 impl CliOverrides {
+    /// Keeps only values explicitly supplied on the command line.
+    ///
+    /// `args` and `matches` must describe the same parse. Clap's default values
+    /// must stay absent here so they cannot overwrite file or environment values.
     pub fn from_args(args: &crate::Args, matches: &clap::ArgMatches) -> Self {
         use clap::parser::ValueSource;
         let supplied = |name| matches.value_source(name) == Some(ValueSource::CommandLine);
@@ -167,11 +221,13 @@ impl CliOverrides {
     }
 }
 
-/// Maps terminal keys to their configured messages.
+/// Validated lookup of normalized terminal keys to their configured messages.
 #[derive(Clone, Debug)]
 pub struct BindingMap(HashMap<KeyCode, Message>);
 
 impl BindingMap {
+    /// Looks up an already-normalized key; ASCII character keys must be lowercase.
+    /// The input layer normalizes events and handles reserved/media keys separately.
     pub fn message(&self, key: &KeyCode) -> Option<Message> {
         self.0.get(key).copied()
     }
@@ -195,7 +251,16 @@ pub enum Error {
     },
 }
 
-/// Loads settings from defaults, an optional exact TOML file, environment, and CLI overrides.
+/// Resolves and validates settings, returning the compiled terminal bindings.
+///
+/// Later sources win: defaults, the exact TOML path, `LOWFI_*` environment, then
+/// explicit CLI values. Binding lists replace earlier lists rather than append.
+/// A missing file is allowed; this function never creates or overwrites it.
+///
+/// # Errors
+/// Returns errors for unreadable or malformed configuration, unknown fields,
+/// invalid values, or invalid/duplicate bindings. Diagnostics identify the field
+/// and source where available. Legacy UI/MPRIS switches are handled separately.
 pub fn load(path: &Path, cli: CliOverrides) -> Result<(Settings, BindingMap), Error> {
     let exists = path.try_exists().map_err(|source| Error::Read {
         path: path.into(),
@@ -213,7 +278,13 @@ pub fn load(path: &Path, cli: CliOverrides) -> Result<(Settings, BindingMap), Er
         figment = figment.merge(Toml::file_exact(path));
     }
     let figment = figment
-        .merge(Env::prefixed("LOWFI_").split("__"))
+        .merge(
+            Env::prefixed("LOWFI_")
+                // These process switches predate structured configuration. Feeding
+                // them into Settings would make deny_unknown_fields reject them.
+                .ignore(&["disable_ui", "fixed_mpris_name"])
+                .split("__"),
+        )
         .merge(Serialized::defaults(cli));
     let settings: Settings = figment.extract()?;
 
@@ -234,6 +305,14 @@ fn validate_settings(settings: &Settings, figment: &Figment, path: &Path) -> Res
             path,
         ));
     }
+    if settings.interfaces.mode.menubar() && !cfg!(all(target_os = "macos", feature = "menubar")) {
+        return Err(invalid(
+            "interfaces.mode",
+            "menu bar modes require a macOS build with the `menubar` feature",
+            figment,
+            path,
+        ));
+    }
     Ok(())
 }
 
@@ -243,6 +322,7 @@ impl BindingMap {
         let groups = [
             ("play_pause", &bindings.play_pause, Message::PlayPause),
             ("next", &bindings.next, Message::Next),
+            ("previous", &bindings.previous, Message::Previous),
             ("quit", &bindings.quit, Message::Quit),
             ("bookmark", &bindings.bookmark, Message::Bookmark),
             ("volume_up", &bindings.volume_up, Message::ChangeVolume(0.1)),
@@ -305,6 +385,7 @@ fn action_for(message: Message) -> &'static str {
     match message {
         Message::PlayPause => "play_pause",
         Message::Next => "next",
+        Message::Previous => "previous",
         Message::Quit => "quit",
         Message::Bookmark => "bookmark",
         Message::ChangeVolume(change) if change > 0.09 => "volume_up",
@@ -346,38 +427,58 @@ mod tests {
 
     #[test]
     fn defaults_preserve_every_existing_binding() {
-        let path = Path::new("missing.toml");
-        let (settings, keys) = load(path, CliOverrides::default()).unwrap();
-        assert_eq!(settings, Settings::default());
-        assert!(!path.exists());
-        for (key, message) in [
-            ("p", Message::PlayPause),
-            (" ", Message::PlayPause),
-            ("s", Message::Next),
-            ("n", Message::Next),
-            ("l", Message::Next),
-            ("q", Message::Quit),
-            ("b", Message::Bookmark),
-            ("+", Message::ChangeVolume(0.1)),
-            ("=", Message::ChangeVolume(0.1)),
-            ("k", Message::ChangeVolume(0.1)),
-            ("-", Message::ChangeVolume(-0.1)),
-            ("_", Message::ChangeVolume(-0.1)),
-            ("j", Message::ChangeVolume(-0.1)),
-            ("Up", Message::ChangeVolume(0.1)),
-            ("Down", Message::ChangeVolume(-0.1)),
-            ("Right", Message::ChangeVolume(0.01)),
-            ("Left", Message::ChangeVolume(-0.01)),
-        ] {
-            assert_eq!(keys.message(&parse_key(key).unwrap()), Some(message));
-        }
+        figment::Jail::expect_with(|_| {
+            let path = Path::new("missing.toml");
+            let (settings, keys) = load(path, CliOverrides::default()).unwrap();
+            assert_eq!(settings, Settings::default());
+            assert!(!path.exists());
+            for (key, message) in [
+                ("p", Message::PlayPause),
+                (" ", Message::PlayPause),
+                ("s", Message::Next),
+                ("n", Message::Next),
+                ("l", Message::Next),
+                ("q", Message::Quit),
+                ("b", Message::Bookmark),
+                ("+", Message::ChangeVolume(0.1)),
+                ("=", Message::ChangeVolume(0.1)),
+                ("k", Message::ChangeVolume(0.1)),
+                ("-", Message::ChangeVolume(-0.1)),
+                ("_", Message::ChangeVolume(-0.1)),
+                ("j", Message::ChangeVolume(-0.1)),
+                ("Up", Message::ChangeVolume(0.1)),
+                ("Down", Message::ChangeVolume(-0.1)),
+                ("Right", Message::ChangeVolume(0.01)),
+                ("Left", Message::ChangeVolume(-0.01)),
+            ] {
+                assert_eq!(keys.message(&parse_key(key).unwrap()), Some(message));
+            }
+
+            Ok(())
+        });
     }
 
     #[test]
     fn file_environment_and_cli_precedence() {
         Jail::expect_with(|jail| {
             jail.create_file("config.toml", "[ui]\nfps = 20\n")?;
+            assert_eq!(
+                load(Path::new("config.toml"), CliOverrides::default())
+                    .unwrap()
+                    .0
+                    .ui
+                    .fps,
+                20
+            );
             jail.set_env("LOWFI_UI__FPS", "30");
+            assert_eq!(
+                load(Path::new("config.toml"), CliOverrides::default())
+                    .unwrap()
+                    .0
+                    .ui
+                    .fps,
+                30
+            );
             let cli = CliOverrides {
                 ui: Some(UiOverrides {
                     fps: Some(40),
@@ -386,6 +487,58 @@ mod tests {
                 ..CliOverrides::default()
             };
             assert_eq!(load(Path::new("config.toml"), cli).unwrap().0.ui.fps, 40);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn interface_mode_accepts_environment_override() {
+        Jail::expect_with(|jail| {
+            jail.set_env("LOWFI_INTERFACES__MODE", "terminal");
+            assert_eq!(
+                load(Path::new("missing.toml"), CliOverrides::default())
+                    .unwrap()
+                    .0
+                    .interfaces
+                    .mode,
+                InterfaceMode::Terminal
+            );
+            Ok(())
+        });
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "menubar")))]
+    #[test]
+    fn menu_mode_requires_the_macos_feature() {
+        Jail::expect_with(|jail| {
+            jail.create_file("config.toml", "[interfaces]\nmode = \"menubar\"\n")?;
+            assert!(load(Path::new("config.toml"), CliOverrides::default()).is_err());
+            Ok(())
+        });
+    }
+
+    #[cfg(all(target_os = "macos", feature = "menubar"))]
+    #[test]
+    fn menu_modes_load_on_macos_with_the_menubar_feature() {
+        Jail::expect_with(|jail| {
+            for (name, mode) in [
+                ("menu.toml", "menubar"),
+                ("both.toml", "terminal-and-menubar"),
+            ] {
+                jail.create_file(name, &format!("[interfaces]\nmode = \"{mode}\"\n"))?;
+                assert_eq!(
+                    load(Path::new(name), CliOverrides::default())
+                        .unwrap()
+                        .0
+                        .interfaces
+                        .mode,
+                    if mode == "menubar" {
+                        InterfaceMode::Menubar
+                    } else {
+                        InterfaceMode::TerminalAndMenubar
+                    }
+                );
+            }
             Ok(())
         });
     }
@@ -425,6 +578,13 @@ mod tests {
             assert!(error.contains("ui.fps"));
             assert!(error.contains("config.toml"));
 
+            jail.create_file("small-buffer.toml", "[playback]\nbuffer_size = 1\n")?;
+            let error = load(Path::new("small-buffer.toml"), CliOverrides::default())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("playback.buffer_size"));
+            assert!(error.contains("small-buffer.toml"));
+
             jail.set_env("LOWFI_PLAYBACK__BUFFER_SIZE", "1");
             let error = load(Path::new("missing.toml"), CliOverrides::default())
                 .unwrap_err()
@@ -452,7 +612,10 @@ mod tests {
     #[test]
     fn only_explicit_cli_values_override_configuration() {
         Jail::expect_with(|jail| {
-            jail.create_file("config.toml", "[ui]\nfps = 20\n")?;
+            jail.create_file(
+                "config.toml",
+                "[playback]\npaused = false\ntrack_list = \"from-file\"\nbuffer_size = 2\ntimeout = 1\ndebug = false\n\n[ui]\nalternate = false\nminimalist = false\nborderless = false\nclock = false\nfps = 7\nwidth = 1\n",
+            )?;
 
             let args = crate::Args::try_parse_from(["lowfi"]).unwrap();
             let matches = crate::Args::command()
@@ -461,18 +624,128 @@ mod tests {
             let overrides = CliOverrides::from_args(&args, &matches);
             assert_eq!(
                 load(Path::new("config.toml"), overrides).unwrap().0.ui.fps,
-                20
+                7
             );
 
-            let args = crate::Args::try_parse_from(["lowfi", "--fps", "12"]).unwrap();
-            let matches = crate::Args::command()
-                .try_get_matches_from(["lowfi", "--fps", "12"])
-                .unwrap();
-            let overrides = CliOverrides::from_args(&args, &matches);
+            let load_cli = |arguments: &[&str]| {
+                let args = crate::Args::try_parse_from(arguments).unwrap();
+                let matches = crate::Args::command()
+                    .try_get_matches_from(arguments)
+                    .unwrap();
+                load(
+                    Path::new("config.toml"),
+                    CliOverrides::from_args(&args, &matches),
+                )
+                .unwrap()
+                .0
+            };
+
+            assert!(load_cli(&["lowfi", "--paused"]).playback.paused);
             assert_eq!(
-                load(Path::new("config.toml"), overrides).unwrap().0.ui.fps,
-                12
+                load_cli(&["lowfi", "--track-list", "from-cli"])
+                    .playback
+                    .track_list,
+                "from-cli"
             );
+            assert_eq!(
+                load_cli(&["lowfi", "--buffer-size", "8"])
+                    .playback
+                    .buffer_size,
+                8
+            );
+            assert_eq!(load_cli(&["lowfi", "--timeout", "42"]).playback.timeout, 42);
+            assert!(load_cli(&["lowfi", "--debug"]).playback.debug);
+            assert!(load_cli(&["lowfi", "--alternate"]).ui.alternate);
+            assert!(load_cli(&["lowfi", "--minimalist"]).ui.minimalist);
+            assert!(load_cli(&["lowfi", "--borderless"]).ui.borderless);
+            assert!(load_cli(&["lowfi", "--clock"]).ui.clock);
+            assert_eq!(load_cli(&["lowfi", "--fps", "17"]).ui.fps, 17);
+            assert_eq!(load_cli(&["lowfi", "--width", "9"]).ui.width, 9);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn interface_mode_helpers_preserve_terminal_and_menu_choices() {
+        assert!(InterfaceMode::Terminal.terminal());
+        assert!(!InterfaceMode::Terminal.menubar());
+        assert!(InterfaceMode::TerminalAndMenubar.terminal());
+        assert!(InterfaceMode::TerminalAndMenubar.menubar());
+        assert!(!InterfaceMode::Menubar.terminal());
+        assert!(InterfaceMode::Menubar.menubar());
+    }
+
+    #[test]
+    fn binding_action_names_cover_every_binding_message() {
+        for (message, expected) in [
+            (Message::PlayPause, "play_pause"),
+            (Message::Next, "next"),
+            (Message::Previous, "previous"),
+            (Message::Quit, "quit"),
+            (Message::Bookmark, "bookmark"),
+            (Message::ChangeVolume(0.1), "volume_up"),
+            (Message::ChangeVolume(0.09), "volume_up_fine"),
+            (Message::ChangeVolume(-0.1), "volume_down"),
+            (Message::ChangeVolume(-0.09), "volume_down_fine"),
+            (Message::ChangeVolume(0.01), "volume_up_fine"),
+            (Message::ChangeVolume(-0.01), "volume_down_fine"),
+            (Message::ChangeVolume(0.0), "volume_down_fine"),
+        ] {
+            assert_eq!(action_for(message), expected);
+        }
+    }
+
+    #[test]
+    fn invalid_cli_values_identify_the_cli_flag_as_the_source() {
+        figment::Jail::expect_with(|_| {
+            let args = crate::Args::try_parse_from(["lowfi", "--fps", "0"]).unwrap();
+            let matches = crate::Args::command()
+                .try_get_matches_from(["lowfi", "--fps", "0"])
+                .unwrap();
+            let error = load(
+                Path::new("missing.toml"),
+                CliOverrides::from_args(&args, &matches),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("CLI flag --fps"));
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn built_in_defaults_are_identified_as_the_source() {
+        let figment = Figment::from(Serialized::defaults(Settings::default()));
+        assert_eq!(
+            source_for("ui.fps", &figment, Path::new("missing.toml")),
+            "built-in defaults"
+        );
+    }
+
+    #[test]
+    fn previous_binding_has_a_default_and_can_be_reassigned() {
+        Jail::expect_with(|jail| {
+            let (_, keys) = load(Path::new("missing.toml"), CliOverrides::default()).unwrap();
+            assert_eq!(keys.message(&KeyCode::Char('h')), Some(Message::Previous));
+            jail.create_file("custom.toml", "[bindings]\nprevious = [\"x\"]\n")?;
+            let (_, keys) = load(Path::new("custom.toml"), CliOverrides::default()).unwrap();
+            assert_eq!(keys.message(&KeyCode::Char('x')), Some(Message::Previous));
+            assert_eq!(keys.message(&KeyCode::Char('h')), None);
+            jail.create_file("duplicate.toml", "[bindings]\nprevious = [\"q\"]\n")?;
+            assert!(load(Path::new("duplicate.toml"), CliOverrides::default()).is_err());
+            Ok(())
+        });
+    }
+    #[test]
+    fn legacy_environment_switches_do_not_enter_structured_settings() {
+        Jail::expect_with(|jail| {
+            jail.set_env("LOWFI_DISABLE_UI", "1");
+            jail.set_env("LOWFI_FIXED_MPRIS_NAME", "1");
+            let (settings, _) = load(Path::new("missing.toml"), CliOverrides::default()).unwrap();
+            assert_eq!(settings, Settings::default());
+            jail.set_env("LOWFI_UI__NOT_A_SETTING", "1");
+            assert!(load(Path::new("missing.toml"), CliOverrides::default()).is_err());
             Ok(())
         });
     }

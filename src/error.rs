@@ -5,8 +5,8 @@
 //! persistence). Higher-level functions should generally return
 //! `crate::error::Result<T>` to make error handling consistent.
 
-use crate::{bookmark, tracks, ui, volume};
-use tokio::sync::{broadcast, mpsc};
+use crate::{bookmark, config, tracks, ui, volume};
+use tokio::sync::mpsc;
 
 /// Result alias using the crate-wide `Error` type.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -14,6 +14,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Central application error.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("menu bar mode requires a macOS build with the `menubar` feature")]
+    MenubarUnavailable,
+
+    #[error("configuration error")]
+    Config(#[from] config::Error),
+
     #[error("unable to load/save the persistent volume")]
     PersistentVolume(#[from] volume::Error),
 
@@ -36,7 +42,7 @@ pub enum Error {
     Queue(#[from] mpsc::error::SendError<tracks::Queued>),
 
     #[error("couldn't update UI state")]
-    Broadcast(#[from] broadcast::error::SendError<ui::Update>),
+    Broadcast,
 
     #[error("io error")]
     Io(#[from] std::io::Error),
