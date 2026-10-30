@@ -1,42 +1,31 @@
-//! Contains the code for initializing the UI and creating a [`ui::Handle`].
+//! Terminal frontend initialization.
 
-use crate::ui::{self, input, interface};
+use crate::{
+    player,
+    ui::{self, input, interface},
+    Tasks,
+};
 use tokio::sync::broadcast;
 
-impl crate::Tasks {
-    /// Initializes the UI itself, along with all of the tasks that are related to it.
-    #[allow(clippy::unused_async)]
-    pub async fn ui(
-        &mut self,
-        state: ui::State,
-        settings: &crate::config::Settings,
-        bindings: crate::config::BindingMap,
-    ) -> crate::Result<ui::Handle> {
-        let (utx, urx) = broadcast::channel(8);
-
-        #[cfg(feature = "mpris")]
-        let mpris = ui::mpris::Server::new(state.clone(), self.tx(), urx.resubscribe()).await?;
-
-        #[cfg(all(feature = "media-controls", windows))]
-        let media_controls =
-            ui::media_controls::Server::try_new(state.clone(), self.tx(), urx.resubscribe());
-
-        let params = interface::Params::try_from(settings)?;
-        let interface = interface::Interface::new(params)?;
-        let logger = interface.logger.clone();
-
-        if params.enabled {
-            self.spawn(ui::run(urx, interface, state));
-            self.spawn(input::listen(self.tx(), bindings));
-        }
-
-        Ok(ui::Handle {
-            updater: utx,
-            logger,
-            #[cfg(feature = "mpris")]
-            mpris,
-            #[cfg(all(feature = "media-controls", windows))]
-            media_controls,
-        })
+/// Starts terminal input and rendering and returns its downloader logger.
+pub(crate) fn terminal(
+    tasks: &mut Tasks,
+    state: player::State,
+    settings: &crate::config::Settings,
+    bindings: crate::config::BindingMap,
+    receiver: broadcast::Receiver<player::Update>,
+    terminal: bool,
+) -> crate::Result<interface::Logger> {
+    if !terminal {
+        return Ok(interface::Logger::stderr());
     }
+
+    let params = interface::Params::try_from(settings)?;
+    let interface = interface::Interface::new(params)?;
+    let logger = interface.logger.clone();
+    if params.enabled {
+        tasks.spawn(ui::run(receiver, interface, ui::State::new(state)));
+        tasks.spawn(input::listen(tasks.tx(), bindings));
+    }
+    Ok(logger)
 }

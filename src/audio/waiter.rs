@@ -33,6 +33,13 @@ pub struct Handle {
 }
 
 impl Handle {
+    #[cfg(test)]
+    pub(crate) fn idle() -> Self {
+        Self {
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
     /// Notify the waiter that playback state may have changed and it should
     /// re-check the sink emptiness condition.
     pub fn notify(&self) {

@@ -14,7 +14,7 @@ use mpris_server::{
 };
 use tokio::sync::{broadcast, mpsc};
 
-use crate::{player::Current, ui::Update};
+use crate::player::{Current, PlaybackView, State, Update};
 use crate::{ui, Message};
 
 const ERROR: fdo::Error = fdo::Error::Failed(String::new());
@@ -51,7 +51,7 @@ impl Into<fdo::Error> for crate::Error {
 
 /// The actual MPRIS player.
 pub struct Player {
-    sink: Arc<rodio::Player>,
+    playback: PlaybackView,
     current: ArcSwap<Current>,
     list: String,
     sender: Sender,
@@ -147,7 +147,7 @@ impl PlayerInterface for Player {
     async fn playback_status(&self) -> fdo::Result<PlaybackStatus> {
         Ok(if self.current.load().loading() {
             PlaybackStatus::Stopped
-        } else if self.sink.is_paused() {
+        } else if self.playback.is_paused() {
             PlaybackStatus::Paused
         } else {
             PlaybackStatus::Playing
@@ -163,12 +163,11 @@ impl PlayerInterface for Player {
     }
 
     async fn rate(&self) -> fdo::Result<PlaybackRate> {
-        Ok(self.sink.speed().into())
+        Ok(self.playback.rate().into())
     }
 
     async fn set_rate(&self, rate: PlaybackRate) -> Result<()> {
-        self.sink.set_speed(rate as f32);
-        Ok(())
+        self.sender.zbus(Message::SetRate(rate as f32)).await
     }
 
     async fn shuffle(&self) -> fdo::Result<bool> {
@@ -211,7 +210,7 @@ impl PlayerInterface for Player {
     }
 
     async fn volume(&self) -> fdo::Result<Volume> {
-        Ok(self.sink.volume().into())
+        Ok(self.playback.volume().into())
     }
 
     async fn set_volume(&self, volume: Volume) -> Result<()> {
@@ -219,7 +218,9 @@ impl PlayerInterface for Player {
     }
 
     async fn position(&self) -> fdo::Result<Time> {
-        Ok(Time::from_micros(self.sink.get_pos().as_micros() as i64))
+        Ok(Time::from_micros(
+            self.playback.position().as_micros() as i64
+        ))
     }
 
     async fn minimum_rate(&self) -> fdo::Result<PlaybackRate> {
@@ -275,6 +276,7 @@ impl Server {
         }
 
         match message {
+            Message::SetRate(_) => self.update_rate().await,
             Message::ChangeVolume(_) | Message::SetVolume(_) => self.update_volume().await,
             Message::Play | Message::Pause | Message::PlayPause => self.update_playback().await,
             Message::Init | Message::Loaded | Message::Next => self.update_metadata().await,
@@ -293,8 +295,10 @@ impl Server {
 
     /// Updates the volume with the latest information.
     async fn update_volume(&mut self) -> ui::Result<()> {
-        self.changed(vec![Property::Volume(self.player().sink.volume().into())])
-            .await?;
+        self.changed(vec![Property::Volume(
+            self.player().playback.volume().into(),
+        )])
+        .await?;
 
         Ok(())
     }
@@ -305,6 +309,11 @@ impl Server {
         self.changed(vec![Property::PlaybackStatus(status)]).await?;
 
         Ok(())
+    }
+
+    async fn update_rate(&mut self) -> ui::Result<()> {
+        self.changed(vec![Property::Rate(self.player().playback.rate().into())])
+            .await
     }
 
     /// Updates the current track data with the current information.
@@ -321,25 +330,25 @@ impl Server {
     }
 
     /// Shorthand to get the inner mpris player object.
-    pub fn player(&self) -> &Player {
+    pub(crate) fn player(&self) -> &Player {
         self.inner.imp()
     }
 
     /// Creates a new MPRIS server.
-    pub async fn new(
-        state: ui::State,
+    pub(crate) async fn new(
+        state: State,
         sender: mpsc::Sender<Message>,
         receiver: broadcast::Receiver<Update>,
     ) -> ui::Result<Server> {
         let suffix = if crate::env("LOWFI_FIXED_MPRIS_NAME") {
             String::from("lowfi")
         } else {
-            format!("lowfi.{}.instance{}", state.tracklist, process::id())
+            format!("lowfi.{}.instance{}", state.track_list, process::id())
         };
 
         // Filtered track list, since MPRIS objects don't like non-alphanumeric characters.
         let tracklist: String = state
-            .tracklist
+            .track_list
             .chars()
             .filter(|c| c.is_ascii_lowercase())
             .collect();
@@ -348,7 +357,7 @@ impl Server {
             &suffix,
             Player {
                 sender: Sender::new(sender),
-                sink: state.sink,
+                playback: state.playback,
                 current: ArcSwap::new(Arc::new(state.current)),
                 list: tracklist,
             },
@@ -386,7 +395,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel(1);
         (
             Player {
-                sink: sink.clone(),
+                playback: PlaybackView::new(sink.clone()),
                 current: ArcSwap::new(Arc::new(Current::default())),
                 list: String::from("test"),
                 sender: Sender::new(sender),
@@ -395,6 +404,13 @@ mod tests {
             sink,
             output,
         )
+    }
+
+    #[tokio::test]
+    async fn rate_changes_are_forwarded_to_the_command_channel() {
+        let (player, mut receiver, _, _) = player(false);
+        player.set_rate(1.25).await.unwrap();
+        assert_eq!(receiver.try_recv(), Ok(Message::SetRate(1.25)));
     }
 
     #[tokio::test]
@@ -421,6 +437,7 @@ mod tests {
         let (player, receiver, _, _) = player(false);
         drop(receiver);
         assert!(player.play().await.is_err());
+        assert!(player.set_rate(1.25).await.is_err());
     }
 
     #[tokio::test]
