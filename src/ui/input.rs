@@ -7,6 +7,7 @@ use futures_util::{FutureExt, StreamExt};
 use tokio::sync::mpsc::Sender;
 
 /// Starts the listener to receive input from the terminal for various events.
+#[cfg_attr(test, mutants::skip)]
 pub async fn listen(sender: Sender<Message>, bindings: BindingMap) -> super::Result<()> {
     let mut reader = EventStream::new();
 

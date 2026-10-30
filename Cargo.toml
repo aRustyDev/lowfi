@@ -67,6 +67,7 @@ html-escape = { version = "0.2.13", optional = true }
 indicatif = { version = "0.18.4", optional = true }
 
 [dev-dependencies]
+mutants = "0.0.3"
 figment = { version = "0.10.19", default-features = false, features = ["env", "toml", "test"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -80,3 +81,41 @@ windows = { version = "0.62", optional = true, features = [
     "Win32_System_LibraryLoader",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[package.metadata.cargo-fc]
+# Curated rows keep feature-gate coverage useful without expanding to the full
+# powerset. `default` is explicit because cargo-fc otherwise begins each row
+# with `--no-default-features`.
+allow_feature_sets = [
+    [],
+    ["default"],
+    ["scrape"],
+    ["extra-audio-formats"],
+    ["default", "scrape", "extra-audio-formats"],
+]
+
+[package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
+allow_feature_sets = [
+    [],
+    ["default"],
+    ["scrape"],
+    ["extra-audio-formats"],
+    ["default", "scrape", "extra-audio-formats"],
+    ["mpris"],
+    ["default", "mpris"],
+    ["mpris", "scrape", "extra-audio-formats"],
+    ["default", "mpris", "scrape", "extra-audio-formats"],
+]
+
+[package.metadata.cargo-fc.target.'cfg(target_os = "windows")']
+allow_feature_sets = [
+    [],
+    ["default"],
+    ["scrape"],
+    ["extra-audio-formats"],
+    ["default", "scrape", "extra-audio-formats"],
+    ["media-controls"],
+    ["default", "media-controls"],
+    ["media-controls", "scrape", "extra-audio-formats"],
+    ["default", "media-controls", "scrape", "extra-audio-formats"],
+]

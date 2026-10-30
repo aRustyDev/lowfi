@@ -4,9 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use souvlaki::{
-    MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig,
-};
+use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::player::Current;
@@ -137,6 +135,7 @@ impl Server {
             .map_err(|e| ui::Error::MediaControls(format!("{e:?}")))
     }
 
+    #[cfg_attr(test, mutants::skip)]
     fn sync_metadata(&mut self) -> ui::Result<()> {
         let (title, duration) = match &self.current {
             Current::Loading(_) => ("Loading...", None),
@@ -154,6 +153,44 @@ impl Server {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_events_map_without_initializing_native_controls() {
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Play),
+            Some(Message::Play)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Stop),
+            Some(Message::Pause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Pause),
+            Some(Message::Pause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Toggle),
+            Some(Message::PlayPause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Next),
+            Some(Message::Next)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Quit),
+            Some(Message::Quit)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::SetVolume(0.25)),
+            Some(Message::SetVolume(0.25))
+        );
+        assert_eq!(Server::map_event(MediaControlEvent::Previous), None);
+    }
+}
+
 /// Minimal hidden window + Win32 message pump required by SMTC.
 mod windows {
     use std::io::Error;
@@ -164,8 +201,8 @@ mod windows {
     use ::windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use ::windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW,
-        RegisterClassExW, TranslateMessage, MSG, PM_REMOVE, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WM_QUIT, WNDCLASSEXW,
+        RegisterClassExW, TranslateMessage, MSG, PM_REMOVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_QUIT,
+        WNDCLASSEXW,
     };
 
     pub struct DummyWindow {
