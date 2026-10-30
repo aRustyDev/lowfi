@@ -280,3 +280,39 @@ Native Windows execution remains unverified locally. This pass did not rerun liv
 
 Publication uses explicit branch refs and the captured remote SHA in each `--force-with-lease`, after complete local verification. The integration branch remains a fork-only review/testing branch; this audit is not added to any upstream PR. PR bodies are updated only to describe the documentation or current validation, preserving existing rationale and manual test evidence.
 
+## Tool upgrade guidance and stack review notices
+
+The follow-up keeps the tested tool releases pinned and explains how to evaluate
+new releases with `--locked`, check their Rust requirements, and update the guide
+and CI pins together. It does not install or upgrade any tool.
+
+| Branch | Refreshed tip |
+| --- | --- |
+| `stack/0/nextest` | `ce756af703c53aab299a6ea1d1ca153b7249412b` |
+| `stack/1/decouple-playback-core` | `45fc6278d5acb786fbb9517cd0f3b842bf09b77b` |
+| `stack/2/bounded-playback-history` | `d7664040faaba0191fcda29aa6595ddc5313cec1` |
+| `stack/3/macos-menubar` | `8a3a99520443ff831859e44c8238739ba36400f4` |
+| `stack/4/macos-app-pkg` | `d0e582517dffa26bcc06b683e816b804532912b6` |
+
+The refreshed integration code snapshot is `4205da1f70aa4947e3ae77acfb609fe02756cc93`.
+All five changed PR branches and integration passed `cargo fmt --check` and
+`cargo test --locked` (46, 55, 60, 59, 46, and 72 tests respectively).
+Exact tree comparisons confirm that only `CONTRIBUTING.md` changes relative to
+the previous verified tips, before this ledger addition. Executables, dependencies,
+assets, tests, and workflows are identical. Every feature tip is an integration
+ancestor, and original worktree HEADs, status, and dirty-file hashes are preserved.
+
+Local PR-body drafts add reciprocal `#blocked-by` / `#blocking` markers for
+direct dependencies and prominent notices asking reviewers to wait for prerequisite
+merges. The notices explain why GitHub's `Files changed` view currently includes
+prerequisite work and retain incremental comparison links for reference.
+The dependency edges are #138 → #139; #139 → #140, #141, #143; and #140 → #142.
+AGENTS and CI remain independent. Titles, bases, draft states, rationale, and
+existing manual-test evidence are retained.
+
+Recovery refs use `refs/backup/tooling-guidance/`; the timestamped source refs,
+PR metadata, original worktree hashes, verification logs, and reviewed body drafts
+are under `/private/tmp/lowfi-stack-followup`. Publication uses the captured
+remote SHAs as explicit force-with-lease values. No native execution or full mutation
+passes were repeated for this Markdown-only update; the preceding pass records
+those checks and its Windows/native-integration limitations.
