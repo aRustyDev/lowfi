@@ -213,7 +213,11 @@ pub fn load(path: &Path, cli: CliOverrides) -> Result<(Settings, BindingMap), Er
         figment = figment.merge(Toml::file_exact(path));
     }
     let figment = figment
-        .merge(Env::prefixed("LOWFI_").split("__"))
+        .merge(
+            Env::prefixed("LOWFI_")
+                .ignore(&["disable_ui", "fixed_mpris_name"])
+                .split("__"),
+        )
         .merge(Serialized::defaults(cli));
     let settings: Settings = figment.extract()?;
 
@@ -569,5 +573,18 @@ mod tests {
             source_for("ui.fps", &figment, Path::new("missing.toml")),
             "built-in defaults"
         );
+    }
+
+    #[test]
+    fn legacy_environment_switches_do_not_enter_structured_settings() {
+        Jail::expect_with(|jail| {
+            jail.set_env("LOWFI_DISABLE_UI", "1");
+            jail.set_env("LOWFI_FIXED_MPRIS_NAME", "1");
+            let (settings, _) = load(Path::new("missing.toml"), CliOverrides::default()).unwrap();
+            assert_eq!(settings, Settings::default());
+            jail.set_env("LOWFI_UI__NOT_A_SETTING", "1");
+            assert!(load(Path::new("missing.toml"), CliOverrides::default()).is_err());
+            Ok(())
+        });
     }
 }
