@@ -1,14 +1,13 @@
 //! Windows System Media Transport Controls (SMTC) via [`souvlaki`].
 //! Soft-fails on init so playback still works without SMTC.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
 use tokio::sync::{broadcast, mpsc};
 
-use crate::player::Current;
-use crate::ui::{self, Update};
+use crate::player::{Current, PlaybackView, State, Update};
+use crate::ui;
 use crate::Message;
 
 /// Handle to SMTC; keeps the dummy HWND alive and syncs metadata/playback.
@@ -17,7 +16,7 @@ pub struct Server {
     /// Must outlive `controls` on Windows.
     _dummy_window: windows::DummyWindow,
     pump_shutdown: std::sync::mpsc::Sender<()>,
-    sink: Arc<rodio::Player>,
+    playback: PlaybackView,
     current: Current,
     list: String,
     receiver: broadcast::Receiver<Update>,
@@ -43,8 +42,8 @@ impl Server {
     }
 
     /// Creates SMTC controls, or `None` if registration fails (playback continues).
-    pub fn try_new(
-        state: ui::State,
+    pub(crate) fn try_new(
+        state: State,
         sender: mpsc::Sender<Message>,
         receiver: broadcast::Receiver<Update>,
     ) -> Option<Self> {
@@ -58,7 +57,7 @@ impl Server {
     }
 
     fn create(
-        state: ui::State,
+        state: State,
         sender: mpsc::Sender<Message>,
         receiver: broadcast::Receiver<Update>,
     ) -> Result<Self, String> {
@@ -94,9 +93,9 @@ impl Server {
             controls,
             _dummy_window: dummy_window,
             pump_shutdown,
-            sink: state.sink,
+            playback: state.playback,
             current: state.current,
-            list: state.tracklist,
+            list: state.track_list,
             receiver,
         };
         let _ = server.sync_playback();
@@ -125,7 +124,7 @@ impl Server {
     fn sync_playback(&mut self) -> ui::Result<()> {
         let status = if self.current.loading() {
             MediaPlayback::Stopped
-        } else if self.sink.is_paused() {
+        } else if self.playback.is_paused() {
             MediaPlayback::Paused { progress: None }
         } else {
             MediaPlayback::Playing { progress: None }
@@ -135,6 +134,8 @@ impl Server {
             .map_err(|e| ui::Error::MediaControls(format!("{e:?}")))
     }
 
+    // Native SMTC publication needs a Windows desktop integration harness. Keep
+    // it outside the adapter mutation scope; map_event is exercised in-process.
     #[cfg_attr(test, mutants::skip)]
     fn sync_metadata(&mut self) -> ui::Result<()> {
         let (title, duration) = match &self.current {

@@ -91,3 +91,6 @@ Inspect `mutants.out/missed.txt`, `timeout.txt`, `unviable.txt`, and
 `outcomes.json`; timeouts and execution errors require investigation. Use
 `cargo mutants --test-tool cargo` only when nextest is unavailable, and never
 retry a failed nextest run automatically with another runner.
+
+The core mutation scope also covers `src/player.rs`; `Player::close` is excluded
+because it persists user files. Core tests render fixture audio in memory.

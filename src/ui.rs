@@ -1,13 +1,12 @@
-//! Everything which has to do with the user interface, including both input and output.
+//! Terminal input and rendering.
 
-use std::sync::Arc;
-
-use crate::{player::Current, ui::interface::Logger};
 use tokio::{sync::broadcast, time::Instant};
 
+use crate::player::{self, Update};
+
 pub mod environment;
-pub mod init;
 pub use environment::Environment;
+pub mod init;
 pub mod input;
 pub mod interface;
 pub use interface::Interface;
@@ -19,159 +18,99 @@ pub mod mpris;
 pub mod media_controls;
 
 /// UI-specific result type with [`Error`] as its error.
-type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
 
-/// The error type for the UI, which is used to handle errors
-/// that occur while drawing the UI or handling input.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("unable to convert number: {0}")]
     Conversion(#[from] std::num::TryFromIntError),
-
     #[error("unable to write output: {0}")]
     Write(#[from] std::io::Error),
-
     #[error("sending signal message to backend from ui failed: {0}")]
     SignalSend(#[from] tokio::sync::mpsc::error::SendError<crate::Message>),
-
-    #[error("sharing state between backend and frontend failed: {0}")]
-    StateSend(#[from] tokio::sync::broadcast::error::SendError<Update>),
-
     #[error("error sending a log: {0}")]
     LogSend(#[from] tokio::sync::mpsc::error::SendError<String>),
-
     #[error("you can't disable the UI without MPRIS!")]
     RejectedDisable,
-
     #[cfg(feature = "mpris")]
     #[error("mpris bus error: {0}")]
     ZBus(#[from] mpris_server::zbus::Error),
-
     #[cfg(feature = "mpris")]
     #[error("mpris fdo (zbus interface) error: {0}")]
     Fdo(#[from] mpris_server::zbus::fdo::Error),
-
     #[cfg(all(feature = "media-controls", windows))]
     #[error("media controls error: {0}")]
     MediaControls(String),
 }
 
-/// The UI state, which is all of the information that
-/// the user interface needs to display to the user.
-///
-/// It should be noted that this is also used by MPRIS to keep
-/// track of state.
-#[derive(Clone)]
-pub struct State {
-    /// The audio sink.
-    pub sink: Arc<rodio::Player>,
-
-    /// The current track, which is updated by way of an [`Update`].
-    pub current: Current,
-
-    /// Whether the current track is bookmarked.
-    pub bookmarked: bool,
-
-    /// The timer, which is used when the user changes volume to briefly display it.
+/// Terminal-only state layered over the neutral playback state.
+pub(crate) struct State {
+    pub(crate) player: player::State,
     pub(crate) volume_timer: Option<Instant>,
-
-    /// The name of the playing tracklist, mainly for MPRIS.
-    #[allow(dead_code)]
-    tracklist: String,
 }
 
 impl State {
-    /// Creates an initial UI state.
-    pub fn initial(sink: Arc<rodio::Player>, list: String) -> Self {
+    pub(crate) fn new(player: player::State) -> Self {
         Self {
-            sink,
-            tracklist: list,
-            current: Current::default(),
-            bookmarked: false,
+            player,
             volume_timer: None,
         }
     }
 
-    /// Takes care of small updates, like resetting the volume timer.
-    pub fn tick(&mut self) {
-        let expired = |timer: Instant| timer.elapsed() > std::time::Duration::from_secs(1);
-        if self.volume_timer.is_some_and(expired) {
+    pub(crate) fn tick(&mut self) {
+        if self
+            .volume_timer
+            .is_some_and(|timer| timer.elapsed() > std::time::Duration::from_secs(1))
+        {
             self.volume_timer = None;
         }
     }
-}
 
-/// A UI update sent out by the main player thread, which may
-/// not be immediately applied by the UI.
-///
-/// This corresponds to user actions, like bookmarking a track,
-/// skipping, or changing the volume. The difference is that it also
-/// contains the new information about the track.
-#[derive(Debug, Clone)]
-pub enum Update {
-    Track(Current),
-    Bookmarked(bool),
-    Volume,
-    Quit,
-}
-
-/// The UI handle for controlling the state of the UI, as well as
-/// updating MPRIS information and other small interfacing tasks.
-pub struct Handle {
-    /// Broadcast channel used to send UI updates.
-    updater: broadcast::Sender<Update>,
-
-    /// The MPRIS server, which is more or less a handle to the actual MPRIS thread.
-    #[cfg(feature = "mpris")]
-    pub mpris: mpris::Server,
-
-    /// Windows SMTC handle; None if registration soft-failed.
-    #[cfg(all(feature = "media-controls", windows))]
-    pub media_controls: Option<media_controls::Server>,
-
-    /// Logger which can be used to log important events.
-    logger: Logger,
-}
-
-impl Handle {
-    /// Sends a `ui::Update` to the broadcast channel.
-    pub fn update(&mut self, update: Update) -> crate::Result<()> {
-        self.updater.send(update)?;
-        Ok(())
-    }
-
-    /// Creates a new handle to log events.
-    pub fn logger(&self) -> Logger {
-        self.logger.clone()
+    fn apply(&mut self, update: Update) -> bool {
+        match update {
+            Update::Track(track) => self.player.current = track,
+            Update::Bookmarked(bookmarked) => self.player.bookmarked = bookmarked,
+            Update::Volume => self.volume_timer = Some(Instant::now()),
+            Update::Quit => return false,
+            Update::Playback | Update::Rate => {}
+        }
+        true
     }
 }
 
-/// The main UI process, which will both render the UI to the terminal
-/// and also update state.
-///
-/// It does both of these things at a fixed interval, due to things
-/// like the track duration changing too frequently.
-///
-/// `rx` is the receiver for state updates, `state` the initial state,
-/// and `params` specifies aesthetic options that are specified by the user.
-pub async fn run(
+/// Renders terminal state and consumes core updates at the existing frame cadence.
+pub(crate) async fn run(
     mut updater: broadcast::Receiver<Update>,
     mut interface: Interface,
     mut state: State,
 ) -> Result<()> {
     loop {
-        if let Ok(message) = updater.try_recv() {
-            match message {
-                Update::Track(track) => state.current = track,
-                Update::Bookmarked(bookmarked) => state.bookmarked = bookmarked,
-                Update::Volume => state.volume_timer = Some(Instant::now()),
-                Update::Quit => break,
+        if let Ok(update) = updater.try_recv() {
+            if !state.apply(update) {
+                break;
             }
         }
-
         interface.draw(&state).await?;
         state.tick();
     }
-
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::player::{PlaybackView, State as PlayerState};
+    use std::sync::Arc;
+
+    #[test]
+    fn only_volume_updates_start_the_volume_timer() {
+        let sink = Arc::new(rodio::Player::new().0);
+        let mut state = State::new(PlayerState::initial(PlaybackView::new(sink), "test".into()));
+
+        state.apply(Update::Playback);
+        state.apply(Update::Rate);
+        assert!(state.volume_timer.is_none());
+        state.apply(Update::Volume);
+        assert!(state.volume_timer.is_some());
+    }
 }

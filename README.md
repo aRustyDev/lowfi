@@ -329,3 +329,5 @@ file:///home/user/Other Music/second-file.mp3
 ```
 
 Further examples can be found in the [data](https://github.com/talwat/lowfi/tree/main/data) folder.
+
+Playback and frontend responsibilities are described in [the architecture notes](docs/ARCHITECTURE.md).

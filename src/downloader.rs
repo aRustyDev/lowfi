@@ -169,6 +169,16 @@ pub enum Output {
 }
 
 impl Handle {
+    #[cfg(test)]
+    pub(crate) fn with_tracks(tracks: impl IntoIterator<Item = tracks::Queued>) -> Self {
+        let tracks: Vec<_> = tracks.into_iter().collect();
+        let (sender, queue) = mpsc::channel(tracks.len().max(1));
+        for track in tracks {
+            sender.try_send(track).unwrap();
+        }
+        Self { queue }
+    }
+
     /// Gets either a queued track, or a progress report,
     /// depending on the state of the internal download buffer.
     #[rustfmt::skip]
