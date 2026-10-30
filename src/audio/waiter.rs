@@ -1,4 +1,8 @@
 //! Watches the current playback generation without owning an audio device.
+//!
+//! Completion and restart-capability messages carry the observed generation.
+//! Only newly appended playheads start observation; entering loading invalidates
+//! the player's old generation without starting a new observation here.
 
 use std::{sync::Arc, time::Duration};
 use tokio::{
@@ -49,12 +53,17 @@ impl Handle {
         Self { generations }
     }
 
+    /// Observes the newly appended playhead under a fresh generation ID.
+    ///
+    /// Pending notifications can be replaced before they are observed. Events
+    /// already queued keep their old IDs, so the player must reject stale ones.
     pub fn notify(&self, generation: u64) {
         self.generations.send_replace(generation);
     }
 }
 
 impl crate::Tasks {
+    /// Watches appended playheads and sends generation-tagged completion/capability events.
     pub fn waiter(&mut self, sink: Arc<rodio::Player>) -> Handle {
         let (generations, receiver) = watch::channel(0);
         self.spawn(waiter(sink, self.tx(), receiver));

@@ -50,6 +50,8 @@ pub struct Player {
     /// Persistent bookmark storage used by the player.
     bookmarks: Bookmarks,
     history: History,
+    /// Identifies the current playback attempt, including restarts.
+    /// Replacing audio or entering loading invalidates queued waiter events.
     generation: u64,
 
     /// Current playback state (loading or track).
@@ -142,6 +144,7 @@ impl Player {
         Ok(())
     }
 
+    /// Includes restart of the first track and restoring retained audio while loading.
     fn can_go_previous(&self) -> bool {
         self.history.has_previous()
             || matches!(self.current, Current::Track(_))
@@ -188,6 +191,8 @@ impl Player {
         }
         match self.downloader.track() {
             downloader::Output::Loading(progress) => {
+                // Invalidate the old playhead before stopping it. Its waiter may
+                // still queue completion or capability events while we load.
                 self.generation = self.generation.wrapping_add(1);
                 self.sink.stop();
                 self.set_current(Current::Loading(progress))?;
@@ -201,6 +206,8 @@ impl Player {
         Ok(())
     }
 
+    /// Restarts at or beyond three seconds; otherwise selects a retained previous track.
+    /// While loading, restores the retained current track instead.
     fn previous(&mut self) -> crate::Result<()> {
         if self.current.loading() {
             let _ = self.play_current_history()?;
@@ -213,7 +220,9 @@ impl Player {
         self.update_previous_capability()
     }
 
-    /// Applies one command and publishes its observable state updates.
+    /// Handles a command, publishing any updates before native adapters are notified.
+    /// False means ignored or quit; `run` handles quit separately before calling.
+    /// Generation checks reject waiter events left over from a replaced playhead.
     fn apply(&mut self, message: Message) -> crate::Result<bool> {
         match message {
             Message::Next if self.current.loading() => return Ok(false),

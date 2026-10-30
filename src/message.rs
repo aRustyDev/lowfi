@@ -2,8 +2,8 @@
 #[allow(dead_code, reason = "this code may not be dead depending on features")]
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum Message {
-    /// Deliberate user request to go to the next song, also sent when the
-    /// song is over by the waiter.
+    /// Explicit request to advance playback.
+    /// Automatic completion uses `Finished` so stale playhead events can be ignored.
     Next,
 
     /// Previous retained track, or restart after the three-second threshold.

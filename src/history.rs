@@ -3,7 +3,11 @@
 use crate::tracks;
 use std::{collections::VecDeque, time::Duration};
 
-/// Session-local, compressed track history.
+/// A bounded timeline of compressed tracks retained for this session.
+///
+/// The eleven-entry limit includes the current track and any forward entries.
+/// Moving backward keeps those entries: after A → B → C, Previous selects B
+/// and Next returns C without downloading it again.
 #[derive(Default)]
 pub(crate) struct History {
     tracks: VecDeque<tracks::Queued>,
@@ -11,11 +15,14 @@ pub(crate) struct History {
 }
 
 impl History {
+    /// Maximum retained entries, including the current one.
     pub(crate) const CAPACITY: usize = 11;
+    /// At this inclusive threshold, Previous restarts rather than moving backward.
     pub(crate) const RESTART_AFTER: Duration = Duration::from_secs(3);
     pub(crate) fn current(&self) -> Option<&tracks::Queued> {
         self.current.and_then(|index| self.tracks.get(index))
     }
+    /// Moves the cursor backward without removing retained forward entries.
     pub(crate) fn previous(&mut self) -> Option<&tracks::Queued> {
         let index = self.current?.checked_sub(1)?;
         self.current = Some(index);
@@ -29,6 +36,10 @@ impl History {
         self.current = Some(index);
         self.current()
     }
+    /// Appends and selects a downloaded track, evicting the oldest if full.
+    ///
+    /// The player exhausts retained forward entries with `next` before calling
+    /// this. Appending does not truncate entries beyond the current cursor.
     pub(crate) fn push(&mut self, track: tracks::Queued) {
         self.tracks.push_back(track);
         self.current = Some(self.tracks.len() - 1);
