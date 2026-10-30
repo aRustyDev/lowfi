@@ -364,6 +364,10 @@ impl Server {
 
 #[cfg(test)]
 mod tests {
+    //! Call the interface methods directly to test Lowfi's command/state contract.
+    //! No D-Bus service is registered; bus traffic and property signals need live
+    //! integration validation beyond these in-process checks.
+
     use super::*;
     use crate::{tests::fixture, tracks::Info};
     use rodio::queue::SourcesQueueOutput;

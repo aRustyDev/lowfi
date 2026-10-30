@@ -18,7 +18,7 @@ pub mod mpris;
 #[cfg(all(feature = "media-controls", windows))]
 pub mod media_controls;
 
-/// Shorthand for a [`Result`] with a [`ui::Error`].
+/// UI-specific result type with [`Error`] as its error.
 type Result<T> = std::result::Result<T, Error>;
 
 /// The error type for the UI, which is used to handle errors

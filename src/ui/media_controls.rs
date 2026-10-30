@@ -155,6 +155,9 @@ impl Server {
 
 #[cfg(test)]
 mod tests {
+    //! Check event mapping without constructing SMTC or running a desktop pump.
+    //! Native registration, publication and teardown need separate integration checks.
+
     use super::*;
 
     #[test]

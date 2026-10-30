@@ -83,6 +83,8 @@ jobs:
       - name: Check curated macOS feature combinations
         run: cargo fc check --locked --all-targets
 
+  # Each mutation rebuilds/tests changed code. Keep this deeper investigation
+  # opt-in so normal PR feedback stays bounded; reports still expose failures.
   mutation:
     if: github.event_name == 'workflow_dispatch' && inputs.run_mutations
     uses: ./.github/workflows/mutation.yml

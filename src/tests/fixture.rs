@@ -20,6 +20,7 @@ use crate::tracks::Queued;
 /// `ffmpeg -f lavfi -i sine=frequency=440:sample_rate=44100:duration=4 -ac 1 -c:a libmp3lame -b:a 64k -write_xing 1 test-tone.mp3`.
 pub const TONE_MP3: &[u8] = include_bytes!("fixtures/test-tone.mp3");
 
+/// Builds a queued fixture without downloading; its URL is only a track identifier.
 pub fn queued(name: &str) -> Queued {
     Queued::new(
         format!("https://example.invalid/{name}.mp3"),
@@ -29,6 +30,8 @@ pub fn queued(name: &str) -> Queued {
     .unwrap()
 }
 
+/// A bounded loopback-test client that ignores environment proxy settings.
+/// Fixture requests must stay local even on machines with HTTP proxies configured.
 pub fn http_client() -> Client {
     Client::builder()
         .no_proxy()
@@ -38,6 +41,10 @@ pub fn http_client() -> Client {
         .unwrap()
 }
 
+/// Owns one loopback listener and its worker thread.
+///
+/// Dropping the server cancels pending acceptance and joins the worker, discarding
+/// worker failures. Use [`Self::finish`] when the test must inspect I/O errors.
 pub struct Server {
     base: String,
     cancelled: Arc<AtomicBool>,
@@ -45,6 +52,10 @@ pub struct Server {
 }
 
 impl Server {
+    /// Serves at most one request on an OS-assigned port.
+    ///
+    /// Acceptance is bounded to five seconds; accepted-stream reads and writes
+    /// each have a two-second timeout. The fixture needs no internet service.
     pub fn serve_once(body: &'static [u8]) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -83,6 +94,11 @@ impl Server {
         &self.base
     }
 
+    /// Cancels pending acceptance, joins the worker, and returns its I/O result.
+    ///
+    /// Success does not prove a request was served: cancellation before a client
+    /// connects also succeeds. Assert the HTTP result separately. Worker panics
+    /// propagate here, whereas `Drop` discards both I/O errors and worker panics.
     pub fn finish(mut self) -> io::Result<()> {
         self.cancelled.store(true, Ordering::Relaxed);
         self.worker.take().unwrap().join().unwrap()
