@@ -171,7 +171,7 @@ impl PlayerInterface for Player {
     }
 
     async fn rate(&self) -> fdo::Result<PlaybackRate> {
-        Ok(self.sink.rate().into())
+        Ok(self.sink.speed().into())
     }
 
     async fn set_rate(&self, rate: PlaybackRate) -> Result<()> {
@@ -227,7 +227,7 @@ impl PlayerInterface for Player {
     }
 
     async fn position(&self) -> fdo::Result<Time> {
-        Ok(Time::from_micros(self.sink.position().as_micros() as i64))
+        Ok(Time::from_micros(self.sink.get_pos().as_micros() as i64))
     }
 
     async fn minimum_rate(&self) -> fdo::Result<PlaybackRate> {
