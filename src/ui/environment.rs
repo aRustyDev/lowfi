@@ -26,12 +26,12 @@ pub struct Environment {
 impl Environment {
     /// This prepares the terminal, returning an [Environment] helpful
     /// for cleaning up afterwards.
-    pub fn ready(args: &crate::Args) -> super::Result<Self> {
+    pub fn ready(settings: &crate::config::Settings) -> super::Result<Self> {
         let enabled = !crate::env("LOWFI_DISABLE_UI");
         if !enabled {
             return Ok(Self {
                 enhancement: false,
-                alternate: args.alternate,
+                alternate: settings.ui.alternate,
                 enabled,
             });
         }
@@ -39,7 +39,7 @@ impl Environment {
         let mut lock = stdout().lock();
 
         crossterm::execute!(lock, Hide)?;
-        if args.alternate {
+        if settings.ui.alternate {
             crossterm::execute!(lock, EnterAlternateScreen, MoveTo(0, 0))?;
         }
 
@@ -56,7 +56,7 @@ impl Environment {
         let environment = Self {
             enabled,
             enhancement,
-            alternate: args.alternate,
+            alternate: settings.ui.alternate,
         };
 
         panic::set_hook(Box::new(move |info| {

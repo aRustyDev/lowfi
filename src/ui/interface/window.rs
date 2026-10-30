@@ -27,7 +27,7 @@ pub struct Window {
     /// Whether content items should be automatically padded (spaced).
     spaced: bool,
 
-    /// Whether to cautiously handle ANSI sequences by adding [`style::Attribute::Reset`] generously.
+    /// Whether to reset styling with [`crossterm::style::Attribute::Reset`].
     fancy: bool,
 }
 

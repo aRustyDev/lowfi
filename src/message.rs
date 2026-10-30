@@ -14,13 +14,13 @@ pub enum Message {
     /// Similar to Next, but specific to the first track.
     Init,
 
-    /// Unpause the [Sink].
+    /// Resume playback.
     Play,
 
-    /// Pauses the [Sink].
+    /// Pause playback.
     Pause,
 
-    /// Pauses the [Sink]. This will also unpause it if it is paused.
+    /// Toggle playback between paused and playing.
     PlayPause,
 
     /// Change the volume of playback.

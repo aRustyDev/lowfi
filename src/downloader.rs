@@ -62,7 +62,7 @@ pub struct Downloader {
     queue: mpsc::Sender<tracks::Queued>,
 
     /// The [`mpsc::Sender`] which is used to inform the
-    /// [`crate::Player`] with [`crate::Message::Loaded`].
+    /// [`crate::player::Player`] with [`crate::Message::Loaded`].
     tx: mpsc::Sender<crate::Message>,
 
     /// The list of tracks to download from.
@@ -184,10 +184,11 @@ impl Handle {
 impl crate::Tasks {
     /// Initializes the downloader with a track list.
     ///
-    /// `tx` specifies the [`Sender`] to be notified with [`crate::Message::Loaded`].
+    /// Uses the owning task group's command sender for [`crate::Message::Loaded`]
+    /// notifications when a track arrives after the player has entered loading.
     pub fn downloader(
         &mut self,
-        args: &crate::Args,
+        settings: &crate::config::Settings,
         logger: Logger,
         tracks: tracks::List,
     ) -> crate::Result<Handle> {
@@ -197,12 +198,12 @@ impl crate::Tasks {
                 "/",
                 env!("CARGO_PKG_VERSION")
             ))
-            .timeout(Duration::from_secs(args.timeout))
+            .timeout(Duration::from_secs(settings.playback.timeout))
             .build()?;
 
-        let (qtx, qrx) = mpsc::channel(args.buffer_size as usize - 1);
+        let (qtx, qrx) = mpsc::channel(settings.playback.buffer_size as usize - 1);
         let downloader = Downloader {
-            debug: args.debug,
+            debug: settings.playback.debug,
             logger,
             queue: qtx,
             tx: self.tx(),

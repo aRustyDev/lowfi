@@ -108,8 +108,12 @@ mod decoded {
 
 #[cfg(test)]
 mod list {
-    use crate::{downloader::Progress, tracks::List};
-    use reqwest::Client;
+    use crate::{
+        downloader::Progress,
+        tests::fixture::{http_client, Server, TONE_MP3},
+        tracks::List,
+    };
+    use std::time::Duration;
 
     #[test]
     fn base_works() {
@@ -166,20 +170,29 @@ mod list {
     }
 
     #[tokio::test]
-    async fn download() {
-        let text = "https://stream.chillhop.com/mp3/\n9476!Apple Juice";
-        let list = List::new("name", text, None);
+    async fn download_and_decode_local_mp3_fixture() {
+        let server = Server::serve_once(TONE_MP3);
+        let base = server.base().to_owned();
+        let list = List::new("name", &format!("{base}\ntone.mp3!Test Tone"), None);
 
-        let client = Client::new();
-        let track = list
+        let client = http_client();
+        let result = list
             .random(&client, Progress::new(), &mut fastrand::Rng::new())
-            .await
-            .unwrap();
-        assert_eq!(track.display, "Apple Juice");
-        assert_eq!(track.path, "https://stream.chillhop.com/mp3/9476");
-        assert_eq!(track.data.len(), 3150424);
+            .await;
+        server.finish().unwrap();
+        let track = result.unwrap();
+        assert_eq!(track.display, "Test Tone");
+        assert_eq!(track.path, format!("{base}tone.mp3"));
+        assert_eq!(track.data.as_ref(), TONE_MP3);
 
-        let decoded = track.decode().unwrap();
-        assert_eq!(decoded.info.duration.unwrap().as_secs(), 143);
+        let mut decoded = track.decode().unwrap();
+        assert_eq!(decoded.info.display, "Test Tone");
+        assert_eq!(decoded.info.path, format!("{base}tone.mp3"));
+        assert!(
+            matches!(decoded.info.duration, Some(duration) if (Duration::from_secs(3)..=Duration::from_secs(5)).contains(&duration))
+        );
+        let samples: Vec<_> = decoded.data.by_ref().take(2_048).collect();
+        assert!(!samples.is_empty());
+        assert!(samples.iter().all(|sample| sample.is_finite()));
     }
 }

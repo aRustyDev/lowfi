@@ -12,11 +12,10 @@ fn decode_url(text: &str) -> String {
         .collect()
 }
 
-/// Formats a name with [`convert_case`].
+/// Derives a display name from the file stem and URL-decodes it.
 ///
-/// This will also strip the first few numbers that are
-/// usually present on most lofi tracks and do some other
-/// formatting operations.
+/// Leading ASCII digits, dots, and parentheses are stripped unless they make up
+/// the whole decoded stem. Surrounding whitespace is trimmed.
 pub fn name(name: &str) -> super::Result<String> {
     let path = Path::new(name);
 

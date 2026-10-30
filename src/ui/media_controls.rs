@@ -135,6 +135,7 @@ impl Server {
             .map_err(|e| ui::Error::MediaControls(format!("{e:?}")))
     }
 
+    #[cfg_attr(test, mutants::skip)]
     fn sync_metadata(&mut self) -> ui::Result<()> {
         let (title, duration) = match &self.current {
             Current::Loading(_) => ("Loading...", None),
@@ -149,6 +150,47 @@ impl Server {
                 ..Default::default()
             })
             .map_err(|e| ui::Error::MediaControls(format!("{e:?}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Check event mapping without constructing SMTC or running a desktop pump.
+    //! Native registration, publication and teardown need separate integration checks.
+
+    use super::*;
+
+    #[test]
+    fn media_events_map_without_initializing_native_controls() {
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Play),
+            Some(Message::Play)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Stop),
+            Some(Message::Pause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Pause),
+            Some(Message::Pause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Toggle),
+            Some(Message::PlayPause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Next),
+            Some(Message::Next)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Quit),
+            Some(Message::Quit)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::SetVolume(0.25)),
+            Some(Message::SetVolume(0.25))
+        );
+        assert_eq!(Server::map_event(MediaControlEvent::Previous), None);
     }
 }
 

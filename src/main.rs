@@ -1,11 +1,12 @@
 //! An extremely simple lofi player.
 
 use crate::player::Player;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 
 pub mod audio;
 pub mod bookmark;
+pub mod config;
 pub mod downloader;
 pub mod error;
 pub mod message;
@@ -61,7 +62,7 @@ pub struct Args {
     #[clap(long, short)]
     debug: bool,
 
-    /// Width of the player, from 0 to 32.
+    /// Width of the player, capped at 32.
     #[clap(long, short, default_value_t = 3)]
     width: usize,
 
@@ -127,9 +128,13 @@ async fn main() -> eyre::Result<()> {
         };
     }
 
+    let config_path = data_dir()?.join("config.toml");
+    let overrides = config::CliOverrides::from_args(&args, &Args::command().get_matches());
+    let (settings, bindings) = config::load(&config_path, overrides)?;
+
     let stream = audio::stream()?;
-    let environment = ui::Environment::ready(&args)?;
-    let (mut player, tasks) = Player::init(args, stream.mixer())
+    let environment = ui::Environment::ready(&settings)?;
+    let (mut player, tasks) = Player::init(settings, bindings, stream.mixer())
         .await
         .inspect_err(|_| environment.cleanup(false).unwrap())?;
 

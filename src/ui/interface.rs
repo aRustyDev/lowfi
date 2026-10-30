@@ -1,8 +1,8 @@
 //! Responsible for the actual graphical interface of lowfi.
 
 use crate::{
+    config::Settings,
     ui::{self, State},
-    Args,
 };
 use std::{io::stdout, time::Duration};
 
@@ -67,11 +67,11 @@ impl Default for Params {
     }
 }
 
-impl TryFrom<&Args> for Params {
+impl TryFrom<&Settings> for Params {
     type Error = ui::Error;
 
-    fn try_from(args: &Args) -> ui::Result<Self> {
-        let delta = 1.0 / f32::from(args.fps);
+    fn try_from(settings: &Settings) -> ui::Result<Self> {
+        let delta = 1.0 / f32::from(settings.ui.fps);
         let delta = Duration::from_secs_f32(delta);
 
         let disabled = crate::env("LOWFI_DISABLE_UI");
@@ -82,10 +82,10 @@ impl TryFrom<&Args> for Params {
         Ok(Self {
             delta,
             enabled: !disabled,
-            clock: args.clock,
-            width: 21 + args.width.min(32) * 2,
-            minimalist: args.minimalist,
-            borderless: args.borderless,
+            clock: settings.ui.clock,
+            width: 21 + settings.ui.width.min(32) * 2,
+            minimalist: settings.ui.minimalist,
+            borderless: settings.ui.borderless,
         })
     }
 }
