@@ -15,3 +15,8 @@ event loop stay on the main thread. A worker owns the playback session and
 terminal lifecycle; it forwards immutable snapshots to the menu and accepts
 commands through the existing application channel. Worker completion closes the
 native loop. Menu-only mode starts no terminal input or raw-mode setup.
+
+The optional `macos-app` bundle is independent of the menu frontend. Its small
+launcher opens the existing player in Terminal.app, and the command script
+resolves the adjacent executable after bundle relocation. Signing, notarization,
+automatic installation, services, and IPC remain outside these changes.

@@ -72,7 +72,7 @@ impl State {
             Update::Bookmarked(bookmarked) => self.player.bookmarked = bookmarked,
             Update::Volume => self.volume_timer = Some(Instant::now()),
             Update::Quit => return false,
-            Update::Playback | Update::Rate => {}
+            Update::CanGoPrevious(_) | Update::Restarted | Update::Playback | Update::Rate => {}
         }
         true
     }

@@ -363,3 +363,39 @@ Set `[interfaces].mode` in `config.toml`, or use
 feature-enabled macOS build defaults to `terminal-and-menubar`; all other builds
 default to `terminal`. `menubar` suppresses terminal setup and input, while
 `LOWFI_DISABLE_UI=1` also suppresses terminal setup when a menu is active.
+
+### macOS application bundle
+
+On macOS, create a Finder- and Spotlight-discoverable application bundle with:
+
+```sh
+packaging/macos/build-app.sh
+```
+
+The script requires Rust and macOS's `plutil` utility. It writes `Lowfi.app` to
+`target/<native-target>/release/bundle/Lowfi.app`; it does not install or sign
+the app. To install it for the current machine:
+
+```sh
+cp -R target/"$(rustc -vV | sed -n 's/^host: //p')"/release/bundle/Lowfi.app /Applications/
+open /Applications/Lowfi.app
+```
+
+Finder and Spotlight discover applications placed in `/Applications`. Launching
+Lowfi.app opens the existing terminal interface in Terminal.app, so its controls
+and configuration behave exactly as they do for `lowfi`. To supply command-line
+flags, run the bundled executable directly, for example:
+
+```sh
+/Applications/Lowfi.app/Contents/MacOS/lowfi --paused
+```
+
+macOS usually registers an application when Finder sees it or after the next
+login. If Spotlight has not indexed a newly copied bundle, open it once in
+Finder; developers can also force Launch Services registration with
+`lsregister -f /Applications/Lowfi.app`.
+
+`packaging/macos/Lowfi.png` and `Lowfi.icns` are generated from the existing
+white `docs/media/logo.svg` on a dark neutral background: render it at 1024×1024
+with `rsvg-convert`, create the standard `.iconset` PNG sizes with `sips`, then
+run `iconutil -c icns Lowfi.iconset -o Lowfi.icns`.

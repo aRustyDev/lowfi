@@ -88,3 +88,6 @@ no session bus. Application and native event loops remain outside mutation scope
 
 On macOS also run `cargo nextest run --locked --features menubar,scrape,extra-audio-formats`.
 Icon tests rasterize the embedded SVG without starting AppKit or an audio device.
+
+On macOS run `packaging/macos/build-app.sh` to build and verify the optional
+terminal application bundle. The launcher remains outside mutation scopes.

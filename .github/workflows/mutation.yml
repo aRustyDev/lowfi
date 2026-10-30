@@ -35,7 +35,7 @@ jobs:
             install_alsa: false
           - name: macOS core with menu bar
             os: macos-latest
-            features: menubar
+            features: menubar,macos-app
             config: .cargo/mutants.toml
             install_alsa: false
     steps:
