@@ -2,6 +2,7 @@
 # adapters have dedicated configurations because their compiled feature sets
 # and test boundaries differ by platform.
 examine_globs = [
+    "src/player.rs",
     "src/config.rs",
     "src/ui/input.rs",
 ]

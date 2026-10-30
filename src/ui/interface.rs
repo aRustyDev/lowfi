@@ -16,14 +16,25 @@ pub use titlebar::TitleBar;
 use tokio::sync::mpsc;
 pub use window::Window;
 
-/// Wrapper around [`mpsc::Sender`] which provides a nice API for logging.
+/// Destination for downloader diagnostics.
 #[derive(Clone)]
-pub struct Logger(mpsc::Sender<String>);
+pub enum Logger {
+    Terminal(mpsc::Sender<String>),
+    Stderr,
+}
 
 impl Logger {
+    /// Create a logger for a non-terminal frontend.
+    pub const fn stderr() -> Self {
+        Self::Stderr
+    }
+
     /// Send an informational log.
     pub async fn info(&self, message: String) -> ui::Result<()> {
-        self.0.send(message).await?;
+        match self {
+            Self::Terminal(sender) => sender.send(message).await?,
+            Self::Stderr => eprintln!("lowfi: {message}"),
+        }
         Ok(())
     }
 }
@@ -131,7 +142,7 @@ impl Interface {
         Ok(Self {
             clock: params.clock.then(|| Clock::new(&mut window)),
             interval: tokio::time::interval(params.delta),
-            logger: Logger(sender),
+            logger: Logger::Terminal(sender),
             logs,
             window,
             params,
@@ -147,7 +158,7 @@ impl Interface {
         let action = components::action(state, self.params.width);
 
         let middle = if state.volume_timer.is_some() {
-            let volume = state.sink.volume();
+            let volume = state.player.playback.volume();
             let percentage = format!("{}%", (volume * 100.0).round().abs());
 
             components::audio_bar(self.params.width - 17, volume, &percentage)
@@ -165,7 +176,7 @@ impl Interface {
 
     /// Draws the terminal. This will also wait for the specified
     /// delta to pass before completing.
-    pub async fn draw(&mut self, state: &State) -> super::Result<()> {
+    pub(crate) async fn draw(&mut self, state: &State) -> super::Result<()> {
         if let Some(x) = self.clock.as_mut() {
             x.update(&mut self.window);
         }

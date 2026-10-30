@@ -1,0 +1,11 @@
+# Playback and terminal boundary
+
+The application owns one playback session and routes commands to the player.
+The player owns decoding, playback, bookmarks, and persistence, and publishes
+frontend-neutral updates. Read-only playback views expose volume, position,
+pause state, and rate. Terminal rendering layers its display state over these
+updates without changing the terminal layout or controls.
+
+Linux MPRIS and Windows media controls retain their optional feature gates and
+native implementations. MPRIS can run with the terminal disabled. Native
+adapters share the existing command channel and observe the same playback state.
