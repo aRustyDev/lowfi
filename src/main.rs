@@ -62,7 +62,7 @@ pub struct Args {
     #[clap(long, short)]
     debug: bool,
 
-    /// Width of the player, from 0 to 32.
+    /// Width of the player, capped at 32.
     #[clap(long, short, default_value_t = 3)]
     width: usize,
 

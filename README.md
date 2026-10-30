@@ -186,7 +186,7 @@ slightly tweak the UI or behavior of the menu. The flags can be viewed with `low
 | `-f`, `--fps`                       | FPS of the UI [default: 12]                         |
 | `--timeout`                         | Timeout in seconds for music downloads [default: 16] |
 | `-d`, `--debug`                     | Include ALSA & other logs meant for debugging       |
-| `-w`, `--width <WIDTH>`             | Width of the player, from 0 to 32 [default: 3]      |
+| `-w`, `--width <WIDTH>`             | Player width, capped at 32 [default: 3]              |
 | `-t`, `--track-list <TRACK_LIST>`   | Use a [custom track list](#custom-track-lists)      |
 | `-s`, `--buffer-size <BUFFER_SIZE>` | Internal song buffer size [default: 5]              |
 
@@ -194,49 +194,24 @@ If you need something even more specific, see [ENVIRONMENT_VARS](./docs/ENVIRONM
 
 ### Configuration
 
-Lowfi also reads an optional `config.toml` from its platform data directory:
-`~/.local/share/lowfi/config.toml` on Linux, `%APPDATA%\\lowfi\\config.toml` on
-Windows, and `~/Library/Application Support/lowfi/config.toml` on macOS. It never
-creates or overwrites this file.
-
-Settings are resolved in this order: built-in defaults, `config.toml`, `LOWFI_*`
-environment variables, then explicitly supplied command-line flags. Environment
-variables use `LOWFI_<SECTION>__<FIELD>` names, such as `LOWFI_UI__FPS=20`,
-`LOWFI_PLAYBACK__PAUSED=false`, or `LOWFI_BINDINGS__NEXT='["n", "x"]'`.
+Save persistent settings in an optional `config.toml` in Lowfi's platform data
+directory. Include only the values you want to change, for example:
 
 ```toml
 [playback]
-paused = false
-track_list = "chillhop"
-buffer_size = 5
-timeout = 16
-debug = false
+paused = true
 
 [ui]
-alternate = false
-minimalist = false
-borderless = false
-clock = false
-fps = 12
-width = 3
+fps = 20
 
 [bindings]
-play_pause = ["p", "Space"]
-next = ["s", "n", "l"]
-quit = ["q"]
-bookmark = ["b"]
-volume_up = ["+", "=", "k", "Up"]
-volume_down = ["-", "_", "j", "Down"]
-volume_up_fine = ["Right"]
-volume_down_fine = ["Left"]
+next = ["x"]
 ```
 
-Bindings accept one printable character, `Space`, `Up`, `Down`, `Left`, and
-`Right`; names are case-insensitive. Supplying a binding list replaces that
-action's defaults, while an empty list disables that action's configurable keys.
-`Ctrl+C` remains reserved for quitting. Invalid values, unknown fields, and
-duplicate keys stop startup with an error that identifies the field and source.
-The terminal's small control hints continue to show the default keys.
+Settings resolve from defaults, then the file, then `LOWFI_*` environment
+variables, then explicit CLI flags. Restart Lowfi to pick up file changes.
+See [Configuration](docs/CONFIGURATION.md) for file locations, every option and
+default, environment syntax, binding rules, and validation errors.
 
 ### Extra Features
 
