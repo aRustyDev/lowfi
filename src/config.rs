@@ -350,31 +350,35 @@ mod tests {
 
     #[test]
     fn defaults_preserve_every_existing_binding() {
-        let path = Path::new("missing.toml");
-        let (settings, keys) = load(path, CliOverrides::default()).unwrap();
-        assert_eq!(settings, Settings::default());
-        assert!(!path.exists());
-        for (key, message) in [
-            ("p", Message::PlayPause),
-            (" ", Message::PlayPause),
-            ("s", Message::Next),
-            ("n", Message::Next),
-            ("l", Message::Next),
-            ("q", Message::Quit),
-            ("b", Message::Bookmark),
-            ("+", Message::ChangeVolume(0.1)),
-            ("=", Message::ChangeVolume(0.1)),
-            ("k", Message::ChangeVolume(0.1)),
-            ("-", Message::ChangeVolume(-0.1)),
-            ("_", Message::ChangeVolume(-0.1)),
-            ("j", Message::ChangeVolume(-0.1)),
-            ("Up", Message::ChangeVolume(0.1)),
-            ("Down", Message::ChangeVolume(-0.1)),
-            ("Right", Message::ChangeVolume(0.01)),
-            ("Left", Message::ChangeVolume(-0.01)),
-        ] {
-            assert_eq!(keys.message(&parse_key(key).unwrap()), Some(message));
-        }
+        figment::Jail::expect_with(|_| {
+            let path = Path::new("missing.toml");
+            let (settings, keys) = load(path, CliOverrides::default()).unwrap();
+            assert_eq!(settings, Settings::default());
+            assert!(!path.exists());
+            for (key, message) in [
+                ("p", Message::PlayPause),
+                (" ", Message::PlayPause),
+                ("s", Message::Next),
+                ("n", Message::Next),
+                ("l", Message::Next),
+                ("q", Message::Quit),
+                ("b", Message::Bookmark),
+                ("+", Message::ChangeVolume(0.1)),
+                ("=", Message::ChangeVolume(0.1)),
+                ("k", Message::ChangeVolume(0.1)),
+                ("-", Message::ChangeVolume(-0.1)),
+                ("_", Message::ChangeVolume(-0.1)),
+                ("j", Message::ChangeVolume(-0.1)),
+                ("Up", Message::ChangeVolume(0.1)),
+                ("Down", Message::ChangeVolume(-0.1)),
+                ("Right", Message::ChangeVolume(0.01)),
+                ("Left", Message::ChangeVolume(-0.01)),
+            ] {
+                assert_eq!(keys.message(&parse_key(key).unwrap()), Some(message));
+            }
+
+            Ok(())
+        });
     }
 
     #[test]
@@ -553,17 +557,21 @@ mod tests {
 
     #[test]
     fn invalid_cli_values_identify_the_cli_flag_as_the_source() {
-        let args = crate::Args::try_parse_from(["lowfi", "--fps", "0"]).unwrap();
-        let matches = crate::Args::command()
-            .try_get_matches_from(["lowfi", "--fps", "0"])
-            .unwrap();
-        let error = load(
-            Path::new("missing.toml"),
-            CliOverrides::from_args(&args, &matches),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("CLI flag --fps"));
+        figment::Jail::expect_with(|_| {
+            let args = crate::Args::try_parse_from(["lowfi", "--fps", "0"]).unwrap();
+            let matches = crate::Args::command()
+                .try_get_matches_from(["lowfi", "--fps", "0"])
+                .unwrap();
+            let error = load(
+                Path::new("missing.toml"),
+                CliOverrides::from_args(&args, &matches),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("CLI flag --fps"));
+
+            Ok(())
+        });
     }
 
     #[test]
