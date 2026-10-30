@@ -100,6 +100,10 @@ impl Application {
         self.sender.clone()
     }
 
+    /// Subscribes to the latest playback state, refreshed by applied commands.
+    ///
+    /// The watch channel may coalesce updates; consume snapshots as state, not an
+    /// event log. Notifications do not provide a periodic playback-progress timer.
     #[cfg_attr(not(all(feature = "menubar", target_os = "macos")), allow(dead_code))]
     pub(crate) fn subscribe(&self) -> watch::Receiver<player::PlaybackSnapshot> {
         self.snapshot.subscribe()
