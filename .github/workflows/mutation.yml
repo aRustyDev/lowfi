@@ -33,9 +33,9 @@ jobs:
             features: media-controls
             config: .cargo/mutants-media-controls.toml
             install_alsa: false
-          - name: macOS configuration and input
+          - name: macOS core with menu bar
             os: macos-latest
-            features: default
+            features: menubar
             config: .cargo/mutants.toml
             install_alsa: false
     steps:

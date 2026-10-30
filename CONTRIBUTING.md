@@ -94,3 +94,6 @@ retry a failed nextest run automatically with another runner.
 
 The core mutation scope also covers `src/player.rs`; `Player::close` is excluded
 because it persists user files. Core tests render fixture audio in memory.
+
+On macOS also run `cargo nextest run --locked --features menubar,scrape,extra-audio-formats`.
+Icon tests rasterize the embedded SVG without starting AppKit or an audio device.

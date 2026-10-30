@@ -30,6 +30,20 @@ impl Current {
     }
 }
 
+/// Immutable state used by optional native frontends.
+#[cfg_attr(not(all(feature = "menubar", target_os = "macos")), allow(dead_code))]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PlaybackSnapshot {
+    pub(crate) title: Option<String>,
+    #[allow(dead_code)]
+    pub(crate) duration: Option<Duration>,
+    pub(crate) loading: bool,
+    pub(crate) paused: bool,
+    #[allow(dead_code)]
+    pub(crate) position: Duration,
+    pub(crate) track_list: String,
+}
+
 /// Live, read-only audio state shared by frontends.
 ///
 /// Cloning this view shares the player; it does not snapshot its values. Send
@@ -132,6 +146,21 @@ impl Player {
             updates,
             waiter,
         })
+    }
+
+    pub(crate) fn snapshot(&self, track_list: String) -> PlaybackSnapshot {
+        let (title, duration, loading) = match &self.current {
+            Current::Loading(_) => (None, None, true),
+            Current::Track(track) => (Some(track.display.clone()), track.duration, false),
+        };
+        PlaybackSnapshot {
+            title,
+            duration,
+            loading,
+            paused: self.sink.is_paused(),
+            position: self.sink.get_pos(),
+            track_list,
+        }
     }
 
     fn publish(&self, update: Update) -> crate::Result<()> {
@@ -445,5 +474,23 @@ mod tests {
             Ok(Update::Track(Current::Track(_)))
         ));
         assert!(matches!(updates.try_recv(), Ok(Update::Bookmarked(false))));
+    }
+
+    #[test]
+    fn snapshots_follow_playback_without_changing_the_terminal() {
+        let (mut player, _updates, mut output) = player_with_tracks([fixture::queued("snapshot")]);
+        let snapshot = player.snapshot("list".into());
+        assert!(snapshot.loading);
+        assert!(snapshot.title.is_none());
+        player.handle(Message::Init).unwrap();
+        render(&mut output, 1_024);
+        player.handle(Message::Pause).unwrap();
+        let snapshot = player.snapshot("list".into());
+        assert_eq!(snapshot.title.as_deref(), Some("snapshot"));
+        assert_eq!(snapshot.track_list, "list");
+        assert!(!snapshot.loading);
+        assert!(snapshot.paused);
+        assert!(snapshot.duration.is_some());
+        assert!(snapshot.position > Duration::ZERO);
     }
 }

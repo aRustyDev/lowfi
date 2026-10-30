@@ -14,6 +14,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Central application error.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("menu bar mode requires a macOS build with the `menubar` feature")]
+    MenubarUnavailable,
+
     #[error("configuration error")]
     Config(#[from] config::Error),
 
