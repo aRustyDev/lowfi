@@ -23,7 +23,11 @@ enum UserEvent {
     Snapshot(PlaybackSnapshot),
 }
 
-/// Runs Tao on the macOS main thread while playback runs on one worker thread.
+/// Runs the native menu loop; the caller must be on the process's main thread.
+///
+/// A dedicated worker owns the Tokio runtime, audio stream, and optional terminal
+/// session. Menu callbacks send commands to that worker; playback snapshots return
+/// through the event-loop proxy.
 pub(crate) fn run(
     settings: config::Settings,
     bindings: config::BindingMap,
@@ -77,6 +81,8 @@ pub(crate) fn run(
                     result
                 })
             })();
+            // Wake the native loop when playback exits, including on error, so
+            // the menu does not remain open after its worker has finished.
             let _ = worker_proxy.send_event(UserEvent::Stopped);
             result
         },
@@ -147,6 +153,8 @@ pub(crate) fn run(
             _ => (),
         }
     });
+    // The callback is global. Stop forwarding events, then request worker
+    // shutdown in case the native loop exited first.
     MenuEvent::set_event_handler(None::<fn(MenuEvent)>);
     let _ = commands.send(Message::Quit);
     worker

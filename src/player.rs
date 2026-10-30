@@ -39,6 +39,7 @@ pub(crate) struct PlaybackSnapshot {
     pub(crate) duration: Option<Duration>,
     pub(crate) loading: bool,
     pub(crate) paused: bool,
+    /// Playhead sampled when this snapshot was produced; it does not advance afterward.
     #[allow(dead_code)]
     pub(crate) position: Duration,
     pub(crate) track_list: String,
