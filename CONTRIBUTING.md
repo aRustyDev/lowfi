@@ -39,6 +39,20 @@ cargo install --locked cargo-feature-combinations --version 0.7.0
 cargo install --locked cargo-mutants --version 27.1.0
 ```
 
+These versions match CI. `--version` selects the tool release; `--locked` uses
+that release's packaged dependency lockfile. New releases are not installed
+automatically. See the [Cargo installation reference](https://doc.rust-lang.org/cargo/commands/cargo-install.html#dealing-with-the-lockfile).
+
+To evaluate a newer release locally, replace its `--version` value above and
+keep `--locked`. Review the release notes and required Rust version; test tools
+may require a newer compiler than Lowfi itself. When adopting the release,
+update the version here and wherever that tool is installed in
+`.github/workflows/tooling.yml` and `.github/workflows/mutation.yml` together.
+Verify default/no-default Nextest runs, curated feature checks, and mutation
+inventories on the affected native platforms. Run targeted mutation passes if
+the upgrade changes mutation behavior. Commit the version updates and validation
+results together so contributors and CI use the same tested baseline.
+
 Run `cargo fmt --check`, `cargo test --locked`, `cargo nextest run --locked`,
 `cargo nextest run --locked --no-default-features`, and
 `cargo fc check --locked --all-targets`. Linux needs ALSA development headers
