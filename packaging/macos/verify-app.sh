@@ -33,6 +33,8 @@ expect CFBundleName Lowfi
 expect CFBundlePackageType APPL
 expect CFBundleShortVersionString "$version"
 expect CFBundleVersion "$version"
+# Exercise the bundled player and script without playback or opening Terminal.
+# Launch Services and the live terminal session need a separate manual check.
 "$macos/lowfi" --help >/dev/null
 "$macos/lowfi" --version >/dev/null
 "$resources/Lowfi.command" --help >/dev/null
@@ -40,6 +42,8 @@ expect CFBundleVersion "$version"
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT HUP INT TERM
 iconutil -c iconset "$resources/Lowfi.icns" -o "$temporary/Lowfi.iconset"
+# Check relocation and quoting, including spaces, non-ASCII text and apostrophes.
+# The launch script must also fail when its bundled player is missing.
 relocated="$temporary/Lowfi café's copy.app"
 cp -R "$bundle" "$relocated"
 "$relocated/Contents/Resources/Lowfi.command" --help >/dev/null

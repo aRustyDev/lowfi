@@ -1,4 +1,10 @@
-//! macOS application-bundle launcher for Lowfi's terminal interface.
+//! Finder entry point for Lowfi's terminal application bundle.
+//!
+//! Open `Resources/Lowfi.command` in Terminal.app; that script executes the bundled
+//! `Contents/MacOS/lowfi`. This helper waits for `/usr/bin/open`, not for playback
+//! to finish. Resolve the script from this executable so the bundle can be moved.
+//!
+//! To pass command-line options, invoke the bundled `lowfi` executable directly.
 
 #[cfg(target_os = "macos")]
 fn main() -> std::io::Result<()> {
