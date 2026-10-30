@@ -75,11 +75,11 @@ async fn get(client: &Client, path: &str, source: Source) -> eyre::Result<String
         file.write_all(text.as_bytes()).await?;
 
         if status.is_redirection() {
-            bail!("redirect: {path}")
+            bail!("redirect: {path}");
         }
 
         if status == 404 {
-            bail!("not found: {path}")
+            bail!("not found: {path}");
         }
 
         Ok(text)

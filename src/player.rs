@@ -239,6 +239,11 @@ impl Player {
     fn play(&mut self, queued: tracks::Queued) -> crate::Result<()> {
         let decoded = queued.decode()?;
         let paused = self.sink.is_paused();
+        // Rodio drains a stopped source through the mixer. Resume long enough for that
+        // drain when changing tracks from a paused state, then restore the user's pause.
+        if paused {
+            self.sink.play();
+        }
         self.sink.stop();
         self.sink.append(decoded.data);
         if paused {
@@ -350,9 +355,12 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandOutcome, History, Player, Update};
-    use crate::{audio::waiter, bookmark::Bookmarks, downloader, tracks::Queued, Message};
+    use super::{CommandOutcome, Current, History, PlaybackView, Player, Update};
+    use crate::{
+        audio::waiter, bookmark::Bookmarks, downloader, tests::fixture, tracks::Queued, Message,
+    };
     use bytes::Bytes;
+    use rodio::queue::SourcesQueueOutput;
     use std::time::Duration;
 
     fn track(name: &str) -> Queued {
@@ -360,15 +368,26 @@ mod tests {
     }
 
     fn player() -> (Player, tokio::sync::broadcast::Receiver<Update>) {
+        let (player, receiver, _) = player_with_tracks([]);
+        (player, receiver)
+    }
+
+    fn player_with_tracks(
+        tracks: impl IntoIterator<Item = Queued>,
+    ) -> (
+        Player,
+        tokio::sync::broadcast::Receiver<Update>,
+        SourcesQueueOutput,
+    ) {
         let (updates, receiver) = tokio::sync::broadcast::channel(8);
-        let (sink, _) = rodio::Player::new();
+        let (sink, output) = rodio::Player::new();
         (
             Player {
                 bookmarks: Bookmarks {
                     entries: Vec::new(),
                 },
                 current: Default::default(),
-                downloader: downloader::Handle::empty(),
+                downloader: downloader::Handle::with_tracks(tracks),
                 sink: std::sync::Arc::new(sink),
                 updates,
                 waiter: waiter::Handle::idle(),
@@ -376,7 +395,41 @@ mod tests {
                 generation: 0,
             },
             receiver,
+            output,
         )
+    }
+
+    fn current_name(player: &Player) -> &str {
+        match &player.current {
+            Current::Track(track) => &track.display,
+            Current::Loading(_) => panic!("expected a playing track"),
+        }
+    }
+
+    fn render(output: &mut SourcesQueueOutput, samples: usize) {
+        for sample in output.by_ref().take(samples) {
+            assert!(sample.is_finite());
+        }
+    }
+
+    fn handle_while_rendering(
+        player: &mut Player,
+        output: &mut SourcesQueueOutput,
+        message: Message,
+    ) -> CommandOutcome {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let command = scope.spawn(|| sender.send(player.handle(message)).unwrap());
+            for _ in 0..100_000 {
+                if let Ok(outcome) = receiver.try_recv() {
+                    command.join().unwrap();
+                    return outcome.unwrap();
+                }
+                assert!(output.next().is_some_and(|sample| sample.is_finite()));
+                std::thread::yield_now();
+            }
+            panic!("playback command did not finish while rendering offline");
+        })
     }
 
     #[test]
@@ -395,16 +448,67 @@ mod tests {
         );
         assert_eq!(player.sink.volume(), 0.0);
         assert_eq!(
+            player.handle(Message::SetVolume(2.0)).unwrap(),
+            CommandOutcome::Applied
+        );
+        assert_eq!(player.sink.volume(), 1.0);
+        assert_eq!(
+            player.handle(Message::PlayPause).unwrap(),
+            CommandOutcome::Applied
+        );
+        assert!(!player.sink.is_paused());
+        assert_eq!(
+            player.handle(Message::PlayPause).unwrap(),
+            CommandOutcome::Applied
+        );
+        assert!(player.sink.is_paused());
+        assert_eq!(
             player.handle(Message::SetRate(1.5)).unwrap(),
             CommandOutcome::Applied
         );
         assert_eq!(player.sink.speed(), 1.5);
+        assert_eq!(PlaybackView::new(player.sink.clone()).rate(), 1.5);
+        player.sink.set_volume(0.4);
+        player.handle(Message::ChangeVolume(0.1)).unwrap();
+        assert_eq!(player.sink.volume(), 0.5);
 
         for receiver in [&mut first, &mut second] {
             assert!(matches!(receiver.try_recv(), Ok(Update::Playback)));
             assert!(matches!(receiver.try_recv(), Ok(Update::Volume)));
+            assert!(matches!(receiver.try_recv(), Ok(Update::Volume)));
+            assert!(matches!(receiver.try_recv(), Ok(Update::Playback)));
+            assert!(matches!(receiver.try_recv(), Ok(Update::Playback)));
             assert!(matches!(receiver.try_recv(), Ok(Update::Rate)));
+            assert!(matches!(receiver.try_recv(), Ok(Update::Volume)));
         }
+    }
+
+    #[test]
+    fn loading_guards_and_playback_view_reflect_live_state() {
+        let tracks = [fixture::queued("one"), fixture::queued("two")];
+        let (mut player, mut updates, mut output) = player_with_tracks(tracks);
+
+        let loading = player.snapshot("queue".into());
+        assert!(loading.loading);
+        assert!(loading.title.is_none());
+        assert_eq!(
+            player.handle(Message::Next).unwrap(),
+            CommandOutcome::Ignored
+        );
+        assert!(updates.try_recv().is_err());
+
+        assert_eq!(
+            player.handle(Message::Loaded).unwrap(),
+            CommandOutcome::Applied
+        );
+        assert_eq!(current_name(&player), "one");
+        render(&mut output, 1_024);
+        let playback = PlaybackView::new(player.sink.clone());
+        assert!(playback.position() > Duration::ZERO);
+        assert!(!player.current.loading());
+        let playing = player.snapshot("queue".into());
+        assert!(!playing.loading);
+        assert_eq!(playing.title.as_deref(), Some("one"));
     }
 
     #[test]
@@ -417,6 +521,155 @@ mod tests {
         assert!(receiver.try_recv().is_err());
         assert_eq!(player.handle(Message::Quit).unwrap(), CommandOutcome::Quit);
         assert!(matches!(receiver.try_recv(), Ok(Update::Quit)));
+    }
+
+    #[test]
+    fn playback_commands_transition_valid_tracks_and_preserve_pause() {
+        let tracks = [fixture::queued("one"), fixture::queued("two")];
+        let (mut player, mut updates, mut output) = player_with_tracks(tracks);
+
+        assert_eq!(
+            player.handle(Message::Init).unwrap(),
+            CommandOutcome::Applied
+        );
+        assert_eq!(current_name(&player), "one");
+        assert_eq!(player.generation, 1);
+        render(&mut output, 1_024);
+        assert!(player.sink.get_pos() > Duration::ZERO);
+        assert!(
+            matches!(updates.try_recv(), Ok(Update::Track(Current::Track(track))) if track.display == "one")
+        );
+        assert!(matches!(updates.try_recv(), Ok(Update::Bookmarked(false))));
+        assert!(matches!(
+            updates.try_recv(),
+            Ok(Update::CanGoPrevious(false))
+        ));
+
+        player.handle(Message::Pause).unwrap();
+        assert!(player.sink.is_paused());
+        assert!(matches!(updates.try_recv(), Ok(Update::Playback)));
+        assert_eq!(
+            handle_while_rendering(&mut player, &mut output, Message::Next),
+            CommandOutcome::Applied
+        );
+        assert_eq!(current_name(&player), "two");
+        assert_eq!(player.generation, 2);
+        assert!(player.sink.is_paused());
+        assert!(
+            matches!(updates.try_recv(), Ok(Update::Track(Current::Track(track))) if track.display == "two")
+        );
+        assert!(matches!(updates.try_recv(), Ok(Update::Bookmarked(false))));
+        assert!(matches!(
+            updates.try_recv(),
+            Ok(Update::CanGoPrevious(true))
+        ));
+
+        player.handle(Message::Play).unwrap();
+        assert!(!player.sink.is_paused());
+        assert!(matches!(updates.try_recv(), Ok(Update::Playback)));
+        assert_eq!(
+            handle_while_rendering(&mut player, &mut output, Message::Previous),
+            CommandOutcome::Applied
+        );
+        assert_eq!(current_name(&player), "one");
+        assert_eq!(player.generation, 3);
+        assert!(
+            matches!(updates.try_recv(), Ok(Update::Track(Current::Track(track))) if track.display == "one")
+        );
+        assert!(matches!(updates.try_recv(), Ok(Update::Bookmarked(false))));
+        assert!(matches!(
+            updates.try_recv(),
+            Ok(Update::CanGoPrevious(false))
+        ));
+
+        assert_eq!(
+            handle_while_rendering(&mut player, &mut output, Message::Next),
+            CommandOutcome::Applied
+        );
+        assert_eq!(current_name(&player), "two");
+        assert_eq!(player.generation, 4);
+    }
+
+    #[test]
+    fn matching_generation_advances_and_stale_messages_preserve_transition_state() {
+        let tracks = [fixture::queued("one"), fixture::queued("two")];
+        let (mut player, mut updates, mut output) = player_with_tracks(tracks);
+        player.handle(Message::Init).unwrap();
+        render(&mut output, 1_024);
+        while updates.try_recv().is_ok() {}
+        let first_generation = player.generation;
+
+        assert_eq!(
+            handle_while_rendering(
+                &mut player,
+                &mut output,
+                Message::Finished(first_generation)
+            ),
+            CommandOutcome::Applied
+        );
+        assert_eq!(current_name(&player), "two");
+        let second_generation = player.generation;
+        while updates.try_recv().is_ok() {}
+
+        assert_eq!(
+            player.handle(Message::Finished(first_generation)).unwrap(),
+            CommandOutcome::Ignored
+        );
+        assert_eq!(
+            player
+                .handle(Message::PreviousAvailable(first_generation))
+                .unwrap(),
+            CommandOutcome::Ignored
+        );
+        assert_eq!(current_name(&player), "two");
+        assert_eq!(player.generation, second_generation);
+        assert!(updates.try_recv().is_err());
+
+        assert_eq!(
+            player
+                .handle(Message::PreviousAvailable(second_generation))
+                .unwrap(),
+            CommandOutcome::Applied
+        );
+        assert!(matches!(
+            updates.try_recv(),
+            Ok(Update::CanGoPrevious(true))
+        ));
+    }
+
+    #[test]
+    fn loaded_is_ignored_after_a_track_has_started() {
+        let (mut player, mut updates, _) = player_with_tracks([fixture::queued("one")]);
+        player.handle(Message::Init).unwrap();
+        while updates.try_recv().is_ok() {}
+
+        assert_eq!(
+            player.handle(Message::Loaded).unwrap(),
+            CommandOutcome::Ignored
+        );
+        assert_eq!(current_name(&player), "one");
+        assert!(updates.try_recv().is_err());
+    }
+
+    #[test]
+    fn previous_restarts_a_rendered_track_after_three_seconds() {
+        let (mut player, mut updates, mut output) = player_with_tracks([fixture::queued("one")]);
+        player.handle(Message::Init).unwrap();
+        while updates.try_recv().is_ok() {}
+        render(&mut output, 160_000);
+        assert!(player.sink.get_pos() >= Duration::from_secs(3));
+        assert!(player.can_go_previous());
+
+        handle_while_rendering(&mut player, &mut output, Message::Previous);
+        assert_eq!(current_name(&player), "one");
+        assert_eq!(player.generation, 2);
+        assert!(
+            matches!(updates.try_recv(), Ok(Update::Track(Current::Track(track))) if track.display == "one")
+        );
+        assert!(matches!(updates.try_recv(), Ok(Update::Bookmarked(false))));
+        assert!(matches!(updates.try_recv(), Ok(Update::CanGoPrevious(_))));
+        assert!(matches!(updates.try_recv(), Ok(Update::Restarted)));
+        assert!(matches!(updates.try_recv(), Ok(Update::CanGoPrevious(_))));
     }
 
     #[test]
@@ -480,6 +733,22 @@ mod tests {
         assert_eq!(history.previous().unwrap().display, "one");
         assert_eq!(history.next().unwrap().display, "two");
         assert_eq!(history.next().unwrap().display, "three");
+        assert!(history.next().is_none());
+        assert_eq!(history.current().unwrap().display, "three");
         assert_eq!(history.tracks.len(), 3);
+    }
+
+    #[test]
+    fn stale_generation_messages_are_ignored() {
+        let (mut player, mut receiver) = player();
+        assert_eq!(
+            player.handle(Message::Finished(1)).unwrap(),
+            CommandOutcome::Ignored
+        );
+        assert_eq!(
+            player.handle(Message::PreviousAvailable(1)).unwrap(),
+            CommandOutcome::Ignored
+        );
+        assert!(receiver.try_recv().is_err());
     }
 }

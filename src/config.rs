@@ -420,7 +420,23 @@ mod tests {
     fn file_environment_and_cli_precedence() {
         Jail::expect_with(|jail| {
             jail.create_file("config.toml", "[ui]\nfps = 20\n")?;
+            assert_eq!(
+                load(Path::new("config.toml"), CliOverrides::default())
+                    .unwrap()
+                    .0
+                    .ui
+                    .fps,
+                20
+            );
             jail.set_env("LOWFI_UI__FPS", "30");
+            assert_eq!(
+                load(Path::new("config.toml"), CliOverrides::default())
+                    .unwrap()
+                    .0
+                    .ui
+                    .fps,
+                30
+            );
             let cli = CliOverrides {
                 ui: Some(UiOverrides {
                     fps: Some(40),
@@ -455,6 +471,32 @@ mod tests {
         Jail::expect_with(|jail| {
             jail.create_file("config.toml", "[interfaces]\nmode = \"menubar\"\n")?;
             assert!(load(Path::new("config.toml"), CliOverrides::default()).is_err());
+            Ok(())
+        });
+    }
+
+    #[cfg(all(target_os = "macos", feature = "menubar"))]
+    #[test]
+    fn menu_modes_load_on_macos_with_the_menubar_feature() {
+        Jail::expect_with(|jail| {
+            for (name, mode) in [
+                ("menu.toml", "menubar"),
+                ("both.toml", "terminal-and-menubar"),
+            ] {
+                jail.create_file(name, &format!("[interfaces]\nmode = \"{mode}\"\n"))?;
+                assert_eq!(
+                    load(Path::new(name), CliOverrides::default())
+                        .unwrap()
+                        .0
+                        .interfaces
+                        .mode,
+                    if mode == "menubar" {
+                        InterfaceMode::Menubar
+                    } else {
+                        InterfaceMode::TerminalAndMenubar
+                    }
+                );
+            }
             Ok(())
         });
     }
@@ -494,6 +536,13 @@ mod tests {
             assert!(error.contains("ui.fps"));
             assert!(error.contains("config.toml"));
 
+            jail.create_file("small-buffer.toml", "[playback]\nbuffer_size = 1\n")?;
+            let error = load(Path::new("small-buffer.toml"), CliOverrides::default())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("playback.buffer_size"));
+            assert!(error.contains("small-buffer.toml"));
+
             jail.set_env("LOWFI_PLAYBACK__BUFFER_SIZE", "1");
             let error = load(Path::new("missing.toml"), CliOverrides::default())
                 .unwrap_err()
@@ -521,7 +570,10 @@ mod tests {
     #[test]
     fn only_explicit_cli_values_override_configuration() {
         Jail::expect_with(|jail| {
-            jail.create_file("config.toml", "[ui]\nfps = 20\n")?;
+            jail.create_file(
+                "config.toml",
+                "[playback]\npaused = false\ntrack_list = \"from-file\"\nbuffer_size = 2\ntimeout = 1\ndebug = false\n\n[ui]\nalternate = false\nminimalist = false\nborderless = false\nclock = false\nfps = 7\nwidth = 1\n",
+            )?;
 
             let args = crate::Args::try_parse_from(["lowfi"]).unwrap();
             let matches = crate::Args::command()
@@ -530,19 +582,97 @@ mod tests {
             let overrides = CliOverrides::from_args(&args, &matches);
             assert_eq!(
                 load(Path::new("config.toml"), overrides).unwrap().0.ui.fps,
-                20
+                7
             );
 
-            let args = crate::Args::try_parse_from(["lowfi", "--fps", "12"]).unwrap();
-            let matches = crate::Args::command()
-                .try_get_matches_from(["lowfi", "--fps", "12"])
-                .unwrap();
-            let overrides = CliOverrides::from_args(&args, &matches);
+            let load_cli = |arguments: &[&str]| {
+                let args = crate::Args::try_parse_from(arguments).unwrap();
+                let matches = crate::Args::command()
+                    .try_get_matches_from(arguments)
+                    .unwrap();
+                load(
+                    Path::new("config.toml"),
+                    CliOverrides::from_args(&args, &matches),
+                )
+                .unwrap()
+                .0
+            };
+
+            assert!(load_cli(&["lowfi", "--paused"]).playback.paused);
             assert_eq!(
-                load(Path::new("config.toml"), overrides).unwrap().0.ui.fps,
-                12
+                load_cli(&["lowfi", "--track-list", "from-cli"])
+                    .playback
+                    .track_list,
+                "from-cli"
             );
+            assert_eq!(
+                load_cli(&["lowfi", "--buffer-size", "8"])
+                    .playback
+                    .buffer_size,
+                8
+            );
+            assert_eq!(load_cli(&["lowfi", "--timeout", "42"]).playback.timeout, 42);
+            assert!(load_cli(&["lowfi", "--debug"]).playback.debug);
+            assert!(load_cli(&["lowfi", "--alternate"]).ui.alternate);
+            assert!(load_cli(&["lowfi", "--minimalist"]).ui.minimalist);
+            assert!(load_cli(&["lowfi", "--borderless"]).ui.borderless);
+            assert!(load_cli(&["lowfi", "--clock"]).ui.clock);
+            assert_eq!(load_cli(&["lowfi", "--fps", "17"]).ui.fps, 17);
+            assert_eq!(load_cli(&["lowfi", "--width", "9"]).ui.width, 9);
             Ok(())
         });
+    }
+
+    #[test]
+    fn interface_mode_helpers_preserve_terminal_and_menu_choices() {
+        assert!(InterfaceMode::Terminal.terminal());
+        assert!(!InterfaceMode::Terminal.menubar());
+        assert!(InterfaceMode::TerminalAndMenubar.terminal());
+        assert!(InterfaceMode::TerminalAndMenubar.menubar());
+        assert!(!InterfaceMode::Menubar.terminal());
+        assert!(InterfaceMode::Menubar.menubar());
+    }
+
+    #[test]
+    fn binding_action_names_cover_every_binding_message() {
+        for (message, expected) in [
+            (Message::PlayPause, "play_pause"),
+            (Message::Next, "next"),
+            (Message::Quit, "quit"),
+            (Message::Bookmark, "bookmark"),
+            (Message::ChangeVolume(0.1), "volume_up"),
+            (Message::ChangeVolume(0.09), "volume_up_fine"),
+            (Message::ChangeVolume(-0.1), "volume_down"),
+            (Message::ChangeVolume(-0.09), "volume_down_fine"),
+            (Message::ChangeVolume(0.01), "volume_up_fine"),
+            (Message::ChangeVolume(-0.01), "volume_down_fine"),
+            (Message::ChangeVolume(0.0), "volume_down_fine"),
+        ] {
+            assert_eq!(action_for(message), expected);
+        }
+    }
+
+    #[test]
+    fn invalid_cli_values_identify_the_cli_flag_as_the_source() {
+        let args = crate::Args::try_parse_from(["lowfi", "--fps", "0"]).unwrap();
+        let matches = crate::Args::command()
+            .try_get_matches_from(["lowfi", "--fps", "0"])
+            .unwrap();
+        let error = load(
+            Path::new("missing.toml"),
+            CliOverrides::from_args(&args, &matches),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("CLI flag --fps"));
+    }
+
+    #[test]
+    fn built_in_defaults_are_identified_as_the_source() {
+        let figment = Figment::from(Serialized::defaults(Settings::default()));
+        assert_eq!(
+            source_for("ui.fps", &figment, Path::new("missing.toml")),
+            "built-in defaults"
+        );
     }
 }

@@ -1,0 +1,12 @@
+# Linux MPRIS pass. This enables MPRIS and tests the in-process interface,
+# command forwarding, and error conversion without requiring a D-Bus session.
+examine_globs = ["src/ui/mpris.rs"]
+exclude_globs = ["packaging/**", "src/tests/**", "tests/**", "target/**"]
+# Server creates a real D-Bus service and publishes native properties. Those
+# event-loop and bus interactions are covered by native feature CI, not mutation
+# tests. The Player and Sender remain in scope.
+exclude_re = ["Server::"]
+additional_cargo_args = ["--locked"]
+test_tool = "nextest"
+minimum_test_timeout = 20
+timeout_multiplier = 5

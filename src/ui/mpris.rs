@@ -418,25 +418,38 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{tests::fixture, tracks::Info};
+    use rodio::queue::SourcesQueueOutput;
+    use std::{sync::Arc, time::Duration};
 
-    fn player(can_go_previous: bool) -> (Player, mpsc::Receiver<Message>) {
-        let (sink, _) = rodio::Player::new();
+    fn player(
+        can_go_previous: bool,
+    ) -> (
+        Player,
+        mpsc::Receiver<Message>,
+        Arc<rodio::Player>,
+        SourcesQueueOutput,
+    ) {
+        let (sink, output) = rodio::Player::new();
+        let sink = Arc::new(sink);
         let (sender, receiver) = mpsc::channel(1);
         (
             Player {
-                playback: PlaybackView::new(std::sync::Arc::new(sink)),
+                playback: PlaybackView::new(sink.clone()),
                 current: ArcSwap::new(Arc::new(Current::default())),
-                list: String::new(),
+                list: String::from("test"),
                 sender: Sender::new(sender),
                 can_go_previous: Arc::new(AtomicBool::new(can_go_previous)),
             },
             receiver,
+            sink,
+            output,
         )
     }
 
     #[tokio::test]
     async fn previous_capability_and_dispatch_follow_history_state() {
-        let (player, mut receiver) = player(false);
+        let (player, mut receiver, _, _) = player(false);
         assert!(!player.can_go_previous().await.unwrap());
         player.previous().await.unwrap();
         assert!(receiver.try_recv().is_err());
@@ -444,13 +457,112 @@ mod tests {
         player.can_go_previous.store(true, Ordering::Relaxed);
         assert!(player.can_go_previous().await.unwrap());
         player.previous().await.unwrap();
-        assert_eq!(receiver.recv().await, Some(Message::Previous));
+        assert_eq!(receiver.try_recv(), Ok(Message::Previous));
     }
 
     #[tokio::test]
     async fn rate_changes_are_forwarded_to_the_command_channel() {
-        let (player, mut receiver) = player(false);
+        let (player, mut receiver, _, _) = player(false);
         player.set_rate(1.25).await.unwrap();
-        assert_eq!(receiver.recv().await, Some(Message::SetRate(1.25)));
+        assert_eq!(receiver.try_recv(), Ok(Message::SetRate(1.25)));
+    }
+
+    #[tokio::test]
+    async fn playback_commands_are_forwarded_to_the_command_channel() {
+        let (player, mut receiver, _, _) = player(false);
+        player.play().await.unwrap();
+        assert_eq!(receiver.try_recv(), Ok(Message::Play));
+        player.pause().await.unwrap();
+        assert_eq!(receiver.try_recv(), Ok(Message::Pause));
+        player.play_pause().await.unwrap();
+        assert_eq!(receiver.try_recv(), Ok(Message::PlayPause));
+        player.next().await.unwrap();
+        assert_eq!(receiver.try_recv(), Ok(Message::Next));
+        player.stop().await.unwrap();
+        assert_eq!(receiver.try_recv(), Ok(Message::Quit));
+        player.quit().await.unwrap();
+        assert_eq!(receiver.try_recv(), Ok(Message::Quit));
+        player.set_volume(0.25).await.unwrap();
+        assert_eq!(receiver.try_recv(), Ok(Message::SetVolume(0.25)));
+    }
+
+    #[tokio::test]
+    async fn closed_command_channel_returns_an_error() {
+        let (player, receiver, _, _) = player(false);
+        drop(receiver);
+        assert!(player.play().await.is_err());
+        assert!(player.set_rate(1.25).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn player_properties_and_metadata_follow_playback_state() {
+        let (player, _, sink, mut output) = player(true);
+        assert!(player.raise().await.is_err());
+        assert!(player.can_quit().await.unwrap());
+        assert!(!player.fullscreen().await.unwrap());
+        player.set_fullscreen(true).await.unwrap();
+        assert!(!player.can_set_fullscreen().await.unwrap());
+        assert!(!player.can_raise().await.unwrap());
+        assert!(!player.has_track_list().await.unwrap());
+        assert_eq!(player.identity().await.unwrap(), "lowfi");
+        assert_eq!(player.desktop_entry().await.unwrap(), "dev.talwat.lowfi");
+        assert_eq!(
+            player.supported_uri_schemes().await.unwrap(),
+            vec!["https".to_owned()]
+        );
+        assert_eq!(
+            player.supported_mime_types().await.unwrap(),
+            vec!["audio/mpeg".to_owned()]
+        );
+        assert_eq!(
+            player.playback_status().await.unwrap(),
+            PlaybackStatus::Stopped
+        );
+        assert!(player.seek(Time::ZERO).await.is_err());
+        assert!(player
+            .set_position(TrackId::NO_TRACK, Time::ZERO)
+            .await
+            .is_err());
+        assert!(player
+            .open_uri("https://example.invalid".into())
+            .await
+            .is_err());
+        assert!(player.loop_status().await.is_err());
+        player.set_loop_status(LoopStatus::None).await.unwrap();
+        assert!(player.shuffle().await.unwrap());
+        player.set_shuffle(false).await.unwrap();
+        assert_eq!(player.volume().await.unwrap(), 1.0);
+        assert_eq!(player.rate().await.unwrap(), 1.0);
+        assert_eq!(player.position().await.unwrap(), Time::ZERO);
+        assert_eq!(player.minimum_rate().await.unwrap(), 0.2);
+        assert_eq!(player.maximum_rate().await.unwrap(), 3.0);
+        assert!(player.can_go_next().await.unwrap());
+        assert!(player.can_go_previous().await.unwrap());
+        assert!(player.can_play().await.unwrap());
+        assert!(player.can_pause().await.unwrap());
+        assert!(!player.can_seek().await.unwrap());
+        assert!(player.can_control().await.unwrap());
+
+        sink.append(fixture::queued("position").decode().unwrap().data);
+        for _ in 0..1_024 {
+            assert!(output.next().is_some_and(|sample| sample.is_finite()));
+        }
+        assert!(player.position().await.unwrap() > Time::ZERO);
+
+        player.current.store(Arc::new(Current::Track(Info {
+            path: "https://example.invalid/tone.mp3".into(),
+            display: "Test Tone".into(),
+            width: 9,
+            duration: Some(Duration::from_secs(4)),
+        })));
+        let metadata = player.metadata().await.unwrap();
+        assert_eq!(metadata.title(), Some("Test Tone"));
+        assert_eq!(metadata.album(), Some("test"));
+        assert_eq!(metadata.length(), Some(Time::from_secs(4)));
+        assert!(metadata.trackid().is_some());
+        assert_eq!(
+            player.playback_status().await.unwrap(),
+            PlaybackStatus::Playing
+        );
     }
 }

@@ -77,6 +77,62 @@ indicatif = { version = "0.18.4", optional = true }
 
 [dev-dependencies]
 figment = { version = "0.10.19", default-features = false, features = ["env", "toml", "test"] }
+mutants = "0.0.3"
+
+[package.metadata.cargo-fc]
+# Curated rows keep feature-gate coverage useful without expanding to the full
+# powerset. `default` is explicit because cargo-fc otherwise begins each row
+# with `--no-default-features`.
+allow_feature_sets = [
+    [],
+    ["default"],
+    ["scrape"],
+    ["extra-audio-formats"],
+    ["default", "scrape", "extra-audio-formats"],
+]
+
+[package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
+allow_feature_sets = [
+    [],
+    ["default"],
+    ["scrape"],
+    ["extra-audio-formats"],
+    ["default", "scrape", "extra-audio-formats"],
+    ["mpris"],
+    ["default", "mpris"],
+    ["mpris", "scrape", "extra-audio-formats"],
+    ["default", "mpris", "scrape", "extra-audio-formats"],
+]
+
+[package.metadata.cargo-fc.target.'cfg(target_os = "windows")']
+allow_feature_sets = [
+    [],
+    ["default"],
+    ["scrape"],
+    ["extra-audio-formats"],
+    ["default", "scrape", "extra-audio-formats"],
+    ["media-controls"],
+    ["default", "media-controls"],
+    ["media-controls", "scrape", "extra-audio-formats"],
+    ["default", "media-controls", "scrape", "extra-audio-formats"],
+]
+
+[package.metadata.cargo-fc.target.'cfg(target_os = "macos")']
+allow_feature_sets = [
+    [],
+    ["default"],
+    ["scrape"],
+    ["extra-audio-formats"],
+    ["default", "scrape", "extra-audio-formats"],
+    ["menubar"],
+    ["macos-app"],
+    ["default", "menubar"],
+    ["default", "macos-app"],
+    ["menubar", "macos-app"],
+    ["default", "menubar", "macos-app"],
+    ["menubar", "macos-app", "scrape", "extra-audio-formats"],
+    ["default", "menubar", "macos-app", "scrape", "extra-audio-formats"],
+]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2.186"

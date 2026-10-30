@@ -42,7 +42,7 @@ impl Server {
     }
 
     /// Creates SMTC controls, or `None` if registration fails (playback continues).
-    pub fn try_new(
+    pub(crate) fn try_new(
         state: State,
         sender: mpsc::Sender<Message>,
         receiver: broadcast::Receiver<Update>,
@@ -134,6 +134,9 @@ impl Server {
             .map_err(|e| ui::Error::MediaControls(format!("{e:?}")))
     }
 
+    // Native SMTC publication needs a Windows desktop integration harness. Keep
+    // it outside the adapter mutation scope; map_event is exercised in-process.
+    #[cfg_attr(test, mutants::skip)]
     fn sync_metadata(&mut self) -> ui::Result<()> {
         let (title, duration) = match &self.current {
             Current::Loading(_) => ("Loading...", None),
@@ -148,6 +151,44 @@ impl Server {
                 ..Default::default()
             })
             .map_err(|e| ui::Error::MediaControls(format!("{e:?}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_events_map_without_initializing_native_controls() {
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Play),
+            Some(Message::Play)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Stop),
+            Some(Message::Pause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Pause),
+            Some(Message::Pause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Toggle),
+            Some(Message::PlayPause)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Next),
+            Some(Message::Next)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::Quit),
+            Some(Message::Quit)
+        );
+        assert_eq!(
+            Server::map_event(MediaControlEvent::SetVolume(0.25)),
+            Some(Message::SetVolume(0.25))
+        );
+        assert_eq!(Server::map_event(MediaControlEvent::Previous), None);
     }
 }
 
