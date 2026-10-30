@@ -1,0 +1,23 @@
+name: macOS application bundle
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  launcher-portability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - run: cargo check --locked --features macos-app --bin lowfi-app-launcher
+  bundle:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: packaging/macos/build-app.sh

@@ -17,12 +17,15 @@ documentation = "https://github.com/talwat/lowfi"
 homepage = "https://github.com/talwat/lowfi"
 repository = "https://github.com/talwat/lowfi"
 
+default-run = "lowfi"
+
 [features]
 default = ["default-tracklist"]
 default-tracklist = []
 mpris = ["dep:mpris-server", "dep:arc-swap"]
 # Windows System Media Transport Controls (hardware media keys / overlay).
 media-controls = ["dep:souvlaki", "dep:windows"]
+macos-app = []
 extra-audio-formats = ["rodio/default"]
 scrape = [
     "dep:serde_json",
@@ -30,6 +33,11 @@ scrape = [
     "dep:scraper",
     "dep:indicatif",
 ]
+
+[[bin]]
+name = "lowfi-app-launcher"
+path = "packaging/macos/launcher.rs"
+required-features = ["macos-app"]
 
 [dependencies]
 # Basics
@@ -118,4 +126,13 @@ allow_feature_sets = [
     ["default", "media-controls"],
     ["media-controls", "scrape", "extra-audio-formats"],
     ["default", "media-controls", "scrape", "extra-audio-formats"],
+]
+
+[package.metadata.cargo-fc.target.'cfg(target_os = "macos")']
+allow_feature_sets = [
+    [], ["default"], ["scrape"], ["extra-audio-formats"],
+    ["default", "scrape", "extra-audio-formats"],
+    ["macos-app"], ["default", "macos-app"],
+    ["macos-app", "scrape", "extra-audio-formats"],
+    ["default", "macos-app", "scrape", "extra-audio-formats"],
 ]
