@@ -29,7 +29,7 @@ pub type DecodedData = Decoder<Cursor<Bytes>>;
 /// Tracks which are still waiting in the queue, and can't be played yet.
 ///
 /// This means that only the data & track name are included.
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Queued {
     /// Display name of the track.
     pub display: String,

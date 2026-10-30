@@ -6,6 +6,13 @@ pub enum Message {
     /// song is over by the waiter.
     Next,
 
+    /// Previous retained track, or restart after the three-second threshold.
+    Previous,
+    /// Automatic completion tagged with its playback generation.
+    Finished(u64),
+    /// The restart threshold was reached for this playback generation.
+    PreviousAvailable(u64),
+
     /// When a track is loaded after the caller previously being told to wait.
     /// If a track is taken from the queue, then there is no waiting, so this
     /// is never actually sent.
